@@ -11,7 +11,9 @@ RUN python3 -m pip install --upgrade pip && \
     pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
 WORKDIR /opt
 RUN git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git hunyuan && \
-    pip install -r /opt/hunyuan/requirements.txt && pip install runpod
+    sed -i '/^--extra-index-url/d; /^torchmetrics==/d; /^tb_nightly==/d; /^deepspeed$/d; /^bpy==/d' /opt/hunyuan/requirements.txt && \
+    pip install -r /opt/hunyuan/requirements.txt && pip install runpod && \
+    cd /opt/hunyuan/hy3dshape && pip install -e .
 RUN cd /opt/hunyuan/hy3dpaint/custom_rasterizer && pip install -e . && \
     cd /opt/hunyuan/hy3dpaint/DifferentiableRenderer && bash compile_mesh_painter.sh
 
