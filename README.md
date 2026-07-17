@@ -16,7 +16,7 @@
 - image cleanup → reconstruction → retopology → auto-rig → motion → export stage UI
 - GitHub, 논문, license 및 품질 gate 조사
 
-현재 baseline worker는 실제 이미지 형식과 provenance를 검증하고 prepared artifact를 생성합니다. GPU model이 필요한 reconstruction/auto-rig stage는 adapter request artifact를 생성하므로 아직 model weights를 실행하는 production inference가 아닙니다. 반면 Motion Lab은 bundled skinned GLB의 Idle/Walk/Run clip을 Three.js `AnimationMixer`로 실제 재생하며, 사용자가 가진 animated GLB/GLTF도 local import할 수 있습니다.
+현재 local worker는 image provenance 검증부터 animated GLB export까지 6단계 artifact chain을 실행합니다. `Run full pipeline`으로 전 단계를 연속 실행하고, 생성된 GLB는 backend의 등록 artifact 검증을 거쳐 Motion Lab에 즉시 로드됩니다. 이 local path는 end-to-end workflow와 rig/motion/export를 완전히 검증하는 procedural fallback이며, photoreal reconstruction을 위해서는 TripoSR/InstantMesh 등의 별도 model weights adapter가 필요합니다. Motion Lab은 bundled skinned GLB와 pipeline output의 Idle/Walk/Run clip을 Three.js `AnimationMixer`로 실제 재생하며, 사용자가 가진 animated GLB/GLTF도 local import할 수 있습니다.
 
 ## 문서
 

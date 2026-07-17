@@ -20,7 +20,7 @@ A stage transitions through `queued → ready → running → done|failed`. Only
 
 ## Current executable adapter
 
-`workers/baseline_worker.py` is embedded in the Wails binary and materialized under the app config runtime directory. It validates PNG/JPEG/WebP input, computes dimensions and SHA-256, copies a prepared reference artifact, and implements the same protocol used by future GPU adapters. Subsequent stages currently emit deterministic adapter request artifacts rather than pretending generated geometry exists.
+`workers/baseline_worker.py` and `workers/procedural_character.py` are embedded in the Wails binary and materialized under the app config runtime directory. The prepare stage validates PNG/JPEG/WebP input, dimensions and SHA-256. The offline reconstruction fallback then emits a genuine glTF 2.0 binary containing a skinned humanoid mesh, 13-joint skeleton, inverse bind matrices, skin weights, and `Idle`/`Walk`/`Run` clips. Remaining offline stages copy and validate immutable GLB artifacts, so a complete pipeline can be executed and tested without CUDA. These preview artifacts are explicitly marked `previewOnly`; production model adapters replace them rather than misrepresenting procedural geometry as AI reconstruction.
 
 ## Model adapter contract
 

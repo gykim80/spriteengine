@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,55 @@ func TestRunNextStagePersistsArtifact(t *testing.T) {
 	}
 	if _, err := os.Stat(job.Artifacts[0].Path); err != nil {
 		t.Fatalf("artifact missing: %v", err)
+	}
+}
+
+func TestReadArtifactRejectsUnregisteredPath(t *testing.T) {
+	a := NewApp()
+	if _, err := a.ReadArtifact(filepath.Join(t.TempDir(), "unknown.glb")); err == nil {
+		t.Fatal("expected unregistered artifact rejection")
+	}
+}
+
+func TestCompleteOfflinePipelineProducesAnimatedGLB(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	source := filepath.Join(t.TempDir(), "hero.png")
+	pngHeader := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), []byte("\x00\x00\x00\x10\x00\x00\x00\x20")...)
+	if err := os.WriteFile(source, pngHeader, 0644); err != nil {
+		t.Fatal(err)
+	}
+	a := NewApp()
+	job, err := a.importPath(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range pipeline() {
+		job, err = a.RunNextStage(job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job.Status != "complete" || job.Progress != 100 {
+		t.Fatalf("pipeline incomplete: %#v", job)
+	}
+	last := job.Artifacts[len(job.Artifacts)-1]
+	if last.Kind != "package" || filepath.Ext(last.Path) != ".glb" {
+		t.Fatalf("missing final GLB: %#v", last)
+	}
+	data, err := os.ReadFile(last.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) < 20 || string(data[:4]) != "glTF" {
+		t.Fatal("final artifact is not GLB")
+	}
+	preview, err := a.ReadArtifact(last.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(preview, "data:model/gltf-binary;base64,") {
+		t.Fatal("invalid preview data URL")
 	}
 }
 

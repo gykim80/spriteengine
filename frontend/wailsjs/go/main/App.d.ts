@@ -14,6 +14,10 @@ export function OpenExternal(arg1:string):Promise<void>;
 
 export function OpenWorkspace(arg1:string):Promise<void>;
 
+export function ReadArtifact(arg1:string):Promise<string>;
+
+export function RunAllStages(arg1:string):Promise<main.Job>;
+
 export function RunNextStage(arg1:string):Promise<main.Job>;
 
 export function SystemInfo():Promise<main.SystemInfo>;

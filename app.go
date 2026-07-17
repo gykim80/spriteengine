@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-//go:embed workers/baseline_worker.py
+//go:embed workers/*.py
 var workerFiles embed.FS
 
 type App struct {
@@ -180,19 +181,21 @@ func (a *App) importPath(path string) (Job, error) {
 }
 
 func (a *App) workerPath() (string, error) {
-	data, e := workerFiles.ReadFile("workers/baseline_worker.py")
-	if e != nil {
-		return "", e
-	}
+	files := []string{"baseline_worker.py", "procedural_character.py"}
 	dir := filepath.Join(a.rootPath(), "runtime")
-	if e = os.MkdirAll(dir, 0755); e != nil {
+	if e := os.MkdirAll(dir, 0755); e != nil {
 		return "", e
 	}
-	p := filepath.Join(dir, "spriteengine_worker.py")
-	if e = os.WriteFile(p, data, 0755); e != nil {
-		return "", e
+	for _, name := range files {
+		data, e := workerFiles.ReadFile("workers/" + name)
+		if e != nil {
+			return "", e
+		}
+		if e = os.WriteFile(filepath.Join(dir, name), data, 0755); e != nil {
+			return "", e
+		}
 	}
-	return p, nil
+	return filepath.Join(dir, "baseline_worker.py"), nil
 }
 func nextStage(j Job) (int, bool) {
 	for i, s := range j.Stages {
@@ -297,6 +300,62 @@ func (a *App) failStage(i, s int, cause error) (Job, error) {
 	a.jobs[i].Logs = append(a.jobs[i].Logs, LogEntry{time.Now().Format(time.RFC3339), a.jobs[i].Stages[s].ID, "error", cause.Error()})
 	a.save()
 	return a.jobs[i], cause
+}
+
+func (a *App) ReadArtifact(path string) (string, error) {
+	a.mu.Lock()
+	allowed := false
+	for _, j := range a.jobs {
+		for _, artifact := range j.Artifacts {
+			if artifact.Path == path && strings.HasSuffix(strings.ToLower(path), ".glb") {
+				allowed = true
+				break
+			}
+		}
+	}
+	a.mu.Unlock()
+	if !allowed {
+		return "", errors.New("artifact is not registered")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if len(data) > 100*1024*1024 {
+		return "", errors.New("artifact exceeds preview limit")
+	}
+	if len(data) < 4 || string(data[:4]) != "glTF" {
+		return "", errors.New("artifact is not a GLB")
+	}
+	return "data:model/gltf-binary;base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func (a *App) RunAllStages(id string) (Job, error) {
+	for {
+		a.mu.Lock()
+		var current Job
+		found := false
+		for _, j := range a.jobs {
+			if j.ID == id {
+				current, found = j, true
+				break
+			}
+		}
+		a.mu.Unlock()
+		if !found {
+			return Job{}, errors.New("job not found")
+		}
+		if current.Status == "complete" {
+			return current, nil
+		}
+		if _, ok := nextStage(current); !ok {
+			return current, errors.New("pipeline has no ready stage")
+		}
+		updated, err := a.RunNextStage(id)
+		if err != nil {
+			return updated, err
+		}
+	}
 }
 
 // AdvanceJob is retained for older generated bindings and delegates to the real worker pipeline.

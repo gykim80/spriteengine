@@ -26,6 +26,14 @@ export function OpenWorkspace(arg1) {
   return window['go']['main']['App']['OpenWorkspace'](arg1);
 }
 
+export function ReadArtifact(arg1) {
+  return window['go']['main']['App']['ReadArtifact'](arg1);
+}
+
+export function RunAllStages(arg1) {
+  return window['go']['main']['App']['RunAllStages'](arg1);
+}
+
 export function RunNextStage(arg1) {
   return window['go']['main']['App']['RunNextStage'](arg1);
 }
