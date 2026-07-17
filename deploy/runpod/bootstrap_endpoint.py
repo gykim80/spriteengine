@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from warm_volume import VOLUME_NAME, fetch_progress, items, request
+from warm_volume import VOLUME_NAME, create_pod, fetch_progress, items, request
 
 WORKER_IMAGE = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 BOOTSTRAP_POD_NAME = "spriteengine-endpoint-bootstrap"
@@ -39,6 +39,8 @@ GPU_TYPES = [
     "NVIDIA RTX A6000",
     "NVIDIA GeForce RTX 4090",
     "NVIDIA RTX A5000",
+    "NVIDIA L4",
+    "NVIDIA GeForce RTX 3090",
 ]
 
 # Packages that the shape-only worker never imports (texture/demo/training
@@ -103,7 +105,7 @@ def launch_bootstrap_pod(key, volume_id):
     if stale:
         print(f"terminating stale bootstrap pod {stale['id']}")
         request(key, "DELETE", "/pods/" + stale["id"])
-    pod = request(key, "POST", "/pods", {
+    pod = create_pod(key, {
         "name": BOOTSTRAP_POD_NAME,
         "imageName": "python:3.11-slim",
         "computeType": "CPU",
@@ -175,12 +177,10 @@ def ensure_endpoint(key, volume):
             "gpuCount": 1,
             "workersMin": 0,
             "workersMax": 1,
-            "idleTimeout": 5,
+            "idleTimeout": 60,
             "scalerType": "QUEUE_DELAY",
             "scalerValue": 4,
             "executionTimeoutMs": 900000,
-            "flashboot": True,
-            "allowedCudaVersions": ["12.4", "12.5", "12.6", "12.7", "12.8"],
         })
         print(f"endpoint created: {endpoint['id']}")
     else:

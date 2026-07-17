@@ -79,6 +79,34 @@ def request(key, method, path, body=None, retries=4):
     raise last_error
 
 
+# Cheap cards used only when a datacenter has no SECURE CPU pod capacity; the
+# warm-up/bootstrap workloads are network/CPU bound and ignore the GPU.
+FALLBACK_GPU_TYPES = [
+    "NVIDIA RTX A4000",
+    "NVIDIA RTX A4500",
+    "NVIDIA RTX A5000",
+    "NVIDIA L4",
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA RTX 4000 Ada Generation",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA RTX A6000",
+    "NVIDIA A40",
+    "NVIDIA L40S",
+]
+
+
+def create_pod(key, payload):
+    try:
+        return request(key, "POST", "/pods", payload)
+    except RuntimeError as exc:
+        if "instances available" not in str(exc):
+            raise
+    print("no CPU pod capacity in this datacenter; falling back to a small GPU pod")
+    gpu_payload = {k: v for k, v in payload.items() if k != "vcpuCount"}
+    gpu_payload.update({"computeType": "GPU", "gpuTypeIds": FALLBACK_GPU_TYPES, "gpuCount": 1})
+    return request(key, "POST", "/pods", gpu_payload)
+
+
 def items(value):
     if isinstance(value, list):
         return value
@@ -112,7 +140,7 @@ def launch_pod(key, volume_id, model):
     if stale:
         print(f"terminating stale warmup pod {stale['id']}")
         request(key, "DELETE", "/pods/" + stale["id"])
-    pod = request(key, "POST", "/pods", {
+    pod = create_pod(key, {
         "name": POD_NAME,
         "imageName": "python:3.11-slim",
         "computeType": "CPU",
