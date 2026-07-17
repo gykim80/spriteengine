@@ -237,4 +237,4 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 @keyframes pulse{50%{box-shadow:0 0 0 5px rgba(254,200,75,.35)}}
 @keyframes progressPulse{50%{opacity:.35}}
 @media(max-width:1250px){.library-cards{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:1200px){.shell{grid-template-columns:196px}.workspace{grid-template-columns:1fr 330px}.content,header{padding-left:24px;padding-right:24px}.cards{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:1200px){.shell{grid-template-columns:196px 1fr}.workspace{grid-template-columns:1fr 330px}.content,header{padding-left:24px;padding-right:24px}.cards{grid-template-columns:repeat(2,1fr)}}
