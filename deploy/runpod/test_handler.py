@@ -13,6 +13,24 @@ from unittest import mock
 runpod = types.ModuleType("runpod")
 runpod.serverless = types.SimpleNamespace(start=lambda _: None)
 sys.modules.setdefault("runpod", runpod)
+
+
+class _PassthroughPostprocessor:
+    """Test double for hy3dshape postprocessors: callable that returns the mesh."""
+
+    def __call__(self, mesh, **kwargs):
+        return mesh
+
+
+# handler() imports hy3dshape.postprocessors lazily; stub it so tests run without CUDA deps.
+hy3dshape = types.ModuleType("hy3dshape")
+postprocessors = types.ModuleType("hy3dshape.postprocessors")
+postprocessors.FloaterRemover = lambda: _PassthroughPostprocessor()
+postprocessors.DegenerateFaceRemover = lambda: _PassthroughPostprocessor()
+postprocessors.FaceReducer = lambda: _PassthroughPostprocessor()
+hy3dshape.postprocessors = postprocessors
+sys.modules.setdefault("hy3dshape", hy3dshape)
+sys.modules.setdefault("hy3dshape.postprocessors", postprocessors)
 spec = importlib.util.spec_from_file_location("spriteengine_handler", Path(__file__).with_name("handler.py"))
 handler = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(handler)

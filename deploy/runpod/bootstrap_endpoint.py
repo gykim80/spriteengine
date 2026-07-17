@@ -66,8 +66,14 @@ python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
     printf 'torch==2.5.1\ntorchvision==0.20.1\nrunpod==1.7.13\n' >> /tmp/req.txt
     echo "=== filtered requirements ==="
     cat /tmp/req.txt
-    rm -rf "$V/pydeps311"
-    pip install --no-cache-dir --target "$V/pydeps311" -r /tmp/req.txt
+    # A previous run may have finished the (very long) pip install before being
+    # interrupted; only reinstall when the installed tree is not importable.
+    if PYTHONPATH="$V/pydeps311:$V/hunyuan3d21/hy3dshape" python3 -c "import runpod, hy3dshape.pipelines" 2>/dev/null; then
+        echo "pydeps311 already importable; skipping pip install"
+    else
+        rm -rf "$V/pydeps311"
+        pip install --no-cache-dir --target "$V/pydeps311" -r /tmp/req.txt
+    fi
     mkdir -p "$V/spriteengine"
     echo "$HANDLER_B64" | base64 -d > "$V/spriteengine/handler.py"
     PYTHONPATH="$V/pydeps311:$V/hunyuan3d21/hy3dshape" python3 - <<'PY'
