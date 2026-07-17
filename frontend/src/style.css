@@ -53,6 +53,7 @@ aside{background:var(--surface);border-right:1px solid var(--border);padding:24p
 .mark svg{width:18px}
 .brand+nav{border-top:1px solid var(--border);padding-top:16px}
 nav{display:grid;gap:4px}
+.nav-label{font:9px 'DM Mono';color:var(--muted);letter-spacing:1.5px;padding:0 13px;margin:2px 0 5px}
 nav button,.aside-bottom button{border:0;background:none;padding:11px 13px;border-radius:9px;text-align:left;display:flex;gap:11px;color:var(--text-2);align-items:center;font-weight:500;transition:background .15s,color .15s}
 nav svg,.aside-bottom svg{width:17px}
 nav button:hover,.aside-bottom button:hover{background:var(--surface-2);color:var(--text)}
@@ -85,6 +86,7 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .tabs button.on:after{content:'';position:absolute;height:2px;background:var(--accent);left:0;right:0;bottom:0;border-radius:2px 2px 0 0}
 .status{font:10px 'DM Mono';color:var(--text-2)}
 .status span{border-left:1px solid var(--border-strong);margin-left:12px;padding-left:12px;color:var(--muted)}
+.status.pending i{background:#f79009;box-shadow:0 0 0 3px rgba(247,144,9,.16)}
 
 /* ── Notice ──────────────────────────────── */
 .notice{width:100%;margin-top:12px;padding:10px 14px;border:1px solid var(--accent-border);background:var(--accent-soft);color:#1a4fc4;border-radius:9px;text-align:left;font-weight:500}
