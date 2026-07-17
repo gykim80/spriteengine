@@ -42,18 +42,30 @@ du -sh /runpod-volume/huggingface
 """
 
 
-def request(key, method, path, body=None):
+def request(key, method, path, body=None, retries=4):
+    # The RunPod REST gateway intermittently returns empty bodies/transient
+    # 401/5xx even with valid credentials; retry idempotent-safe failures so a
+    # blip never aborts a multi-GB warmup.
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(API + path, data=data, method=method)
-    req.add_header("Authorization", "Bearer " + key)
-    req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as response:
-            raw = response.read()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")
-        raise RuntimeError(f"RunPod {method} {path}: HTTP {exc.code}: {detail}") from exc
+    last_error = None
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(API + path, data=data, method=method)
+        req.add_header("Authorization", "Bearer " + key)
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            last_error = RuntimeError(f"RunPod {method} {path}: HTTP {exc.code}: {detail}")
+            if method == "POST" or (exc.code < 500 and exc.code != 401):
+                raise last_error from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = RuntimeError(f"RunPod {method} {path}: {exc}")
+        if attempt < retries:
+            time.sleep(5 * (attempt + 1))
+    raise last_error
 
 
 def items(value):
@@ -111,7 +123,13 @@ def wait_for_exit(key, pod_id, timeout_minutes):
     deadline = time.time() + timeout_minutes * 60
     last = ""
     while time.time() < deadline:
-        pod = request(key, "GET", "/pods/" + pod_id)
+        try:
+            pod = request(key, "GET", "/pods/" + pod_id)
+        except RuntimeError as exc:
+            # Never abort (and later terminate) a healthy download over a poll hiccup.
+            print(f"[{time.strftime('%H:%M:%S')}] poll error, retrying: {exc}", flush=True)
+            time.sleep(30)
+            continue
         status = pod.get("desiredStatus") or ""
         change = pod.get("lastStatusChange") or ""
         line = f"{status} | {change}"
@@ -131,21 +149,29 @@ def main():
     p.add_argument("--volume-gb", type=int, default=100)
     p.add_argument("--timeout-minutes", type=int, default=120)
     p.add_argument("--keep-pod", action="store_true", help="Skip terminating the pod after exit")
+    p.add_argument("--pod-id", default="", help="Attach to an already-running warmup pod instead of launching one")
     args = p.parse_args()
     key = os.getenv("RUNPOD_API_KEY", "").strip()
     if not key:
         sys.exit("RUNPOD_API_KEY is required")
 
-    volume = ensure_volume(key, args.region, args.volume_gb)
-    pod = launch_pod(key, volume["id"], args.model)
+    if args.pod_id:
+        volume_id, pod_id = "", args.pod_id
+        print(f"attaching to warmup pod: {pod_id}")
+    else:
+        volume = ensure_volume(key, args.region, args.volume_gb)
+        volume_id, pod_id = volume["id"], launch_pod(key, volume["id"], args.model)["id"]
+    status = "UNKNOWN"
     try:
-        status = wait_for_exit(key, pod["id"], args.timeout_minutes)
+        status = wait_for_exit(key, pod_id, args.timeout_minutes)
     finally:
-        if not args.keep_pod:
-            request(key, "DELETE", "/pods/" + pod["id"])
-            print(f"warmup pod terminated: {pod['id']}")
+        # Terminate only when the pod actually finished; a monitoring failure
+        # must not kill an in-flight download.
+        if not args.keep_pod and status in ("EXITED", "TERMINATED"):
+            request(key, "DELETE", "/pods/" + pod_id)
+            print(f"warmup pod terminated: {pod_id}")
     print(json.dumps({
-        "volumeId": volume["id"],
+        "volumeId": volume_id,
         "model": args.model,
         "podFinalStatus": status,
     }, indent=2))
