@@ -6,8 +6,16 @@ export function AdvanceJob(arg1) {
   return window['go']['main']['App']['AdvanceJob'](arg1);
 }
 
+export function ClearRunPodConfig() {
+  return window['go']['main']['App']['ClearRunPodConfig']();
+}
+
 export function CreateJob(arg1) {
   return window['go']['main']['App']['CreateJob'](arg1);
+}
+
+export function GetRunPodConfig() {
+  return window['go']['main']['App']['GetRunPodConfig']();
 }
 
 export function ImportReference() {
@@ -38,6 +46,18 @@ export function RunNextStage(arg1) {
   return window['go']['main']['App']['RunNextStage'](arg1);
 }
 
+export function SaveAndTestRunPodConfig(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveAndTestRunPodConfig'](arg1, arg2, arg3);
+}
+
+export function SaveRunPodConfig(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveRunPodConfig'](arg1, arg2, arg3);
+}
+
 export function SystemInfo() {
   return window['go']['main']['App']['SystemInfo']();
+}
+
+export function TestRunPod() {
+  return window['go']['main']['App']['TestRunPod']();
 }

@@ -105,6 +105,42 @@ export namespace main {
 		}
 	}
 	
+	export class RunPodConfig {
+	    endpointId: string;
+	    baseUrl: string;
+	    configured: boolean;
+	    keySource: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RunPodConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.endpointId = source["endpointId"];
+	        this.baseUrl = source["baseUrl"];
+	        this.configured = source["configured"];
+	        this.keySource = source["keySource"];
+	    }
+	}
+	export class RunPodStatus {
+	    ok: boolean;
+	    endpointId: string;
+	    message: string;
+	    workers: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RunPodStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.endpointId = source["endpointId"];
+	        this.message = source["message"];
+	        this.workers = source["workers"];
+	    }
+	}
 	
 	export class SystemInfo {
 	    platform: string;

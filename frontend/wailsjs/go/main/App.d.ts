@@ -4,7 +4,11 @@ import {main} from '../models';
 
 export function AdvanceJob(arg1:string):Promise<main.Job>;
 
+export function ClearRunPodConfig():Promise<main.RunPodConfig>;
+
 export function CreateJob(arg1:string):Promise<main.Job>;
+
+export function GetRunPodConfig():Promise<main.RunPodConfig>;
 
 export function ImportReference():Promise<main.Job>;
 
@@ -20,4 +24,10 @@ export function RunAllStages(arg1:string):Promise<main.Job>;
 
 export function RunNextStage(arg1:string):Promise<main.Job>;
 
+export function SaveAndTestRunPodConfig(arg1:string,arg2:string,arg3:string):Promise<main.RunPodStatus>;
+
+export function SaveRunPodConfig(arg1:string,arg2:string,arg3:string):Promise<main.RunPodConfig>;
+
 export function SystemInfo():Promise<main.SystemInfo>;
+
+export function TestRunPod():Promise<main.RunPodStatus>;
