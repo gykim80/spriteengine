@@ -24,21 +24,32 @@ API = "https://rest.runpod.io/v1"
 VOLUME_NAME = "spriteengine-model-cache"
 POD_NAME = "spriteengine-volume-warmup"
 
+# Progress is served over the RunPod HTTP proxy so the caller can observe the
+# download instead of staring at an opaque RUNNING status. WARMUP_OK/WARMUP_FAIL
+# lines are the completion contract consumed by wait_for_completion().
 WARMUP_SCRIPT = r"""
-set -euo pipefail
-export HF_HOME=/runpod-volume/huggingface
-export HUGGINGFACE_HUB_CACHE=/runpod-volume/huggingface/hub
-export HF_HUB_ENABLE_HF_TRANSFER=1
-pip install --no-cache-dir 'huggingface_hub[hf_transfer]==0.27.1'
-python - <<'PY'
+mkdir -p /runpod-volume/huggingface /srv/progress
+cd /srv/progress
+: > progress.log
+python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
+{
+    set -euo pipefail
+    export HF_HOME=/runpod-volume/huggingface
+    export HUGGINGFACE_HUB_CACHE=/runpod-volume/huggingface/hub
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    pip install --no-cache-dir 'huggingface_hub[hf_transfer]==0.27.1'
+    python - <<'PY'
 from huggingface_hub import snapshot_download
 import os
 model = os.environ["WARMUP_MODEL"]
 path = snapshot_download(model, max_workers=8)
 print("snapshot complete:", path, flush=True)
 PY
-touch /runpod-volume/huggingface/.spriteengine-warmup-complete
-du -sh /runpod-volume/huggingface
+    touch /runpod-volume/huggingface/.spriteengine-warmup-complete
+    du -sh /runpod-volume/huggingface
+} >> progress.log 2>&1 && echo WARMUP_OK >> progress.log || echo WARMUP_FAIL >> progress.log
+# Keep serving the result until the monitor terminates the pod.
+sleep 3600
 """
 
 
@@ -110,7 +121,7 @@ def launch_pod(key, volume_id, model):
         "containerDiskInGb": 10,
         "networkVolumeId": volume_id,
         "volumeMountPath": "/runpod-volume",
-        "ports": [],
+        "ports": ["8888/http"],
         "env": {"WARMUP_MODEL": model},
         "dockerEntrypoint": [],
         "dockerStartCmd": ["bash", "-c", WARMUP_SCRIPT],
@@ -119,27 +130,43 @@ def launch_pod(key, volume_id, model):
     return pod
 
 
-def wait_for_exit(key, pod_id, timeout_minutes):
+def fetch_progress(pod_id):
+    url = f"https://{pod_id}-8888.proxy.runpod.net/progress.log"
+    # The RunPod proxy rejects the default Python-urllib user agent.
+    req = urllib.request.Request(url, headers={"User-Agent": "spriteengine-warmup/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return response.read().decode(errors="replace")
+    except Exception:
+        return None
+
+
+def wait_for_completion(key, pod_id, timeout_minutes):
     deadline = time.time() + timeout_minutes * 60
-    last = ""
+    printed = 0
     while time.time() < deadline:
-        try:
-            pod = request(key, "GET", "/pods/" + pod_id)
-        except RuntimeError as exc:
-            # Never abort (and later terminate) a healthy download over a poll hiccup.
-            print(f"[{time.strftime('%H:%M:%S')}] poll error, retrying: {exc}", flush=True)
-            time.sleep(30)
-            continue
-        status = pod.get("desiredStatus") or ""
-        change = pod.get("lastStatusChange") or ""
-        line = f"{status} | {change}"
-        if line != last:
-            print(f"[{time.strftime('%H:%M:%S')}] {line}", flush=True)
-            last = line
-        if status in ("EXITED", "TERMINATED"):
-            return status
-        time.sleep(30)
-    raise TimeoutError(f"warmup pod {pod_id} did not exit within {timeout_minutes} minutes")
+        progress = fetch_progress(pod_id)
+        if progress is not None:
+            if len(progress) > printed:
+                sys.stdout.write(progress[printed:])
+                sys.stdout.flush()
+                printed = len(progress)
+            if "WARMUP_OK" in progress:
+                return "COMPLETED"
+            if "WARMUP_FAIL" in progress:
+                raise RuntimeError("warmup script failed inside the pod; see log above")
+        else:
+            # Proxy not up yet (container starting) or blip: fall back to pod status.
+            try:
+                pod = request(key, "GET", "/pods/" + pod_id)
+                status = pod.get("desiredStatus") or ""
+                print(f"[{time.strftime('%H:%M:%S')}] pod {status}, progress endpoint not reachable yet", flush=True)
+                if status in ("EXITED", "TERMINATED"):
+                    return status
+            except RuntimeError as exc:
+                print(f"[{time.strftime('%H:%M:%S')}] poll error, retrying: {exc}", flush=True)
+        time.sleep(20)
+    raise TimeoutError(f"warmup pod {pod_id} did not finish within {timeout_minutes} minutes")
 
 
 def main():
@@ -163,13 +190,14 @@ def main():
         volume_id, pod_id = volume["id"], launch_pod(key, volume["id"], args.model)["id"]
     status = "UNKNOWN"
     try:
-        status = wait_for_exit(key, pod_id, args.timeout_minutes)
+        status = wait_for_completion(key, pod_id, args.timeout_minutes)
     finally:
-        # Terminate only when the pod actually finished; a monitoring failure
-        # must not kill an in-flight download.
-        if not args.keep_pod and status in ("EXITED", "TERMINATED"):
+        # Terminate on any definitive outcome (success, failure, timeout). Only a
+        # KeyboardInterrupt/crash mid-poll leaves the pod running for re-attach.
+        definitive = status != "UNKNOWN" or isinstance(sys.exc_info()[1], (RuntimeError, TimeoutError))
+        if not args.keep_pod and definitive:
             request(key, "DELETE", "/pods/" + pod_id)
-            print(f"warmup pod terminated: {pod_id}")
+            print(f"\nwarmup pod terminated: {pod_id}")
     print(json.dumps({
         "volumeId": volume_id,
         "model": args.model,
