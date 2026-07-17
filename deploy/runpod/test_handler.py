@@ -42,13 +42,29 @@ class FakeMesh:
         Path(path).write_bytes(b"glTF" + b"\x00" * 20)
 
 
+def tiny_png_bytes() -> bytes:
+    """A real 1x1 PNG so the handler's decodability check passes."""
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (1, 1), (255, 0, 0, 255)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 class HandlerTests(unittest.TestCase):
     def test_requires_image(self):
         with self.assertRaisesRegex(ValueError, "input.image"):
             handler.handler({"input": {}})
 
-    def test_generation_contract(self):
+    def test_rejects_undecodable_image(self):
         image = base64.b64encode(b"not-a-real-png-but-valid-input-bytes").decode()
+        with self.assertRaisesRegex(ValueError, "not a decodable image"):
+            handler.handler({"input": {"image": image}})
+
+    def test_generation_contract(self):
+        image = base64.b64encode(tiny_png_bytes()).decode()
         fake_pipeline = mock.Mock(return_value=[FakeMesh()])
         with mock.patch.object(handler, "pipeline", return_value=fake_pipeline):
             output = handler.handler({"input": {"image": image, "seed": 7, "steps": 999}})
@@ -59,8 +75,9 @@ class HandlerTests(unittest.TestCase):
 
     def test_data_url(self):
         target = Path(tempfile.mkdtemp()) / "input.png"
-        handler.decode_image("data:image/png;base64," + base64.b64encode(b"png").decode(), target)
-        self.assertEqual(target.read_bytes(), b"png")
+        png = tiny_png_bytes()
+        handler.decode_image("data:image/png;base64," + base64.b64encode(png).decode(), target)
+        self.assertEqual(target.read_bytes(), png)
 
 
 if __name__ == "__main__":

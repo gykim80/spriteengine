@@ -30,6 +30,14 @@ def decode_image(value: str, target: Path) -> None:
     if value.startswith("data:"):
         value = value.split(",", 1)[1]
     target.write_bytes(base64.b64decode(value, validate=True))
+    # Fail fast with a clear message: hy3dshape otherwise crashes deep inside
+    # its preprocessor (cv2.imread returns None) on undecodable image bytes.
+    from PIL import Image
+    try:
+        with Image.open(target) as probe:
+            probe.verify()
+    except Exception as exc:
+        raise ValueError(f"input.image is not a decodable image: {exc}") from exc
 
 
 # RunPod drops the whole `output` of a COMPLETED job when it exceeds the

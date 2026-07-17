@@ -296,6 +296,7 @@ type runPodJobResponse struct {
 		Model  string `json:"model"`
 		Format string `json:"format"`
 		Bytes  int    `json:"bytes"`
+		Error  string `json:"error"`
 	} `json:"output"`
 }
 
@@ -310,10 +311,12 @@ func runPodError(value any) string {
 	return string(data)
 }
 
-// runPodSync starts a job and follows the job status when runsync returns before
-// long-running 3D inference has completed (the normal behavior after RunPod's wait window).
+// runPodSync submits the job asynchronously (/run returns the job ID immediately)
+// and polls /status until it settles. /runsync is deliberately avoided: RunPod holds
+// that connection across cold starts (~50s measured), which trips the 30s HTTP
+// client timeout before the wait window ends.
 func (c *runPodClient) runPodSync(ctx context.Context, payload any) (runPodJobResponse, error) {
-	data, _, err := c.request(ctx, http.MethodPost, "runsync", payload)
+	data, _, err := c.request(ctx, http.MethodPost, "run", payload)
 	if err != nil {
 		return runPodJobResponse{}, err
 	}
@@ -359,15 +362,21 @@ func (a *App) runPodReconstruct(imagePath, workspace string) (Artifact, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
+	// octree_resolution/face_count keep the GLB under RunPod's ~20MB response
+	// limit (above it the COMPLETED output is silently dropped by RunPod).
 	payload := map[string]any{"input": map[string]any{
 		"image": base64.StdEncoding.EncodeToString(image), "seed": 1234,
 		"steps": 30, "guidance_scale": 5.0,
+		"octree_resolution": 256, "face_count": 40000,
 	}}
 	response, err := client.runPodSync(ctx, payload)
 	if err != nil {
 		return Artifact{}, err
 	}
 	if response.Output.GLB == "" {
+		if response.Output.Error != "" {
+			return Artifact{}, fmt.Errorf("RunPod reconstruction failed: %s", response.Output.Error)
+		}
 		return Artifact{}, errors.New("RunPod completed without a GLB output")
 	}
 	glb, err := base64.StdEncoding.DecodeString(response.Output.GLB)

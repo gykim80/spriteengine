@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+// isolateConfig keeps tests away from the real user config and RunPod
+// credentials so the offline pipeline path is always exercised.
+func isolateConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("SPRITEENGINE_CONFIG_DIR", t.TempDir())
+	t.Setenv("RUNPOD_ENDPOINT_ID", "")
+	t.Setenv("RUNPOD_API_KEY", "")
+}
+
 func TestPipelineShape(t *testing.T) {
 	stages := pipeline()
 	if len(stages) != 6 || stages[0].Status != "ready" || stages[5].ID != "export" {
@@ -17,8 +26,7 @@ func TestPipelineShape(t *testing.T) {
 }
 
 func TestImportPathCopiesAndHashes(t *testing.T) {
-	config := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", config)
+	isolateConfig(t)
 	source := filepath.Join(t.TempDir(), "hero.png")
 	pngHeader := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), []byte("\x00\x00\x00\x10\x00\x00\x00\x20")...)
 	if err := os.WriteFile(source, pngHeader, 0644); err != nil {
@@ -38,8 +46,7 @@ func TestImportPathCopiesAndHashes(t *testing.T) {
 }
 
 func TestRunNextStagePersistsArtifact(t *testing.T) {
-	config := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", config)
+	isolateConfig(t)
 	source := filepath.Join(t.TempDir(), "hero.png")
 	pngHeader := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), []byte("\x00\x00\x00\x10\x00\x00\x00\x20")...)
 	if err := os.WriteFile(source, pngHeader, 0644); err != nil {
@@ -73,8 +80,7 @@ func TestReadArtifactRejectsUnregisteredPath(t *testing.T) {
 }
 
 func TestCompleteOfflinePipelineProducesAnimatedGLB(t *testing.T) {
-	config := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", config)
+	isolateConfig(t)
 	source := filepath.Join(t.TempDir(), "hero.png")
 	pngHeader := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), []byte("\x00\x00\x00\x10\x00\x00\x00\x20")...)
 	if err := os.WriteFile(source, pngHeader, 0644); err != nil {

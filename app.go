@@ -79,8 +79,19 @@ type workerEvent struct {
 
 func NewApp() *App                         { return &App{jobs: []Job{}} }
 func (a *App) startup(ctx context.Context) { a.ctx = ctx; a.load() }
-func (a *App) rootPath() string            { d, _ := os.UserConfigDir(); return filepath.Join(d, "SpriteEngine") }
-func (a *App) dataPath() string            { return filepath.Join(a.rootPath(), "jobs.json") }
+
+// SPRITEENGINE_CONFIG_DIR isolates config (jobs.json, runpod.json) in tests:
+// on macOS os.UserConfigDir ignores XDG_CONFIG_HOME, so without this seam the
+// test suite reads the developer's real RunPod credentials and hits the live
+// GPU endpoint.
+func (a *App) rootPath() string {
+	if dir := strings.TrimSpace(os.Getenv("SPRITEENGINE_CONFIG_DIR")); dir != "" {
+		return dir
+	}
+	d, _ := os.UserConfigDir()
+	return filepath.Join(d, "SpriteEngine")
+}
+func (a *App) dataPath() string { return filepath.Join(a.rootPath(), "jobs.json") }
 func (a *App) load() {
 	b, e := os.ReadFile(a.dataPath())
 	if e == nil {
