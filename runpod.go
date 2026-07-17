@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +39,11 @@ type RunPodStatus struct {
 
 func normalizeRunPodAPIKey(raw string) string {
 	key := strings.TrimSpace(raw)
+	// Reject masked values shown by dashboards/password managers. Sending these
+	// otherwise produces a confusing 401 even though the field looks populated.
+	if strings.Contains(key, "••••") || strings.Contains(key, "****") {
+		return ""
+	}
 	// Accept common copy/paste forms without sending a malformed double-Bearer header.
 	if i := strings.Index(key, "="); strings.HasPrefix(strings.ToUpper(key), "RUNPOD_API_KEY=") && i >= 0 {
 		key = strings.TrimSpace(key[i+1:])
@@ -238,13 +244,16 @@ func (c *runPodClient) request(ctx context.Context, method, suffix string, body 
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 128<<20))
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusUnauthorized {
-			return data, resp.StatusCode, errors.New("RunPod authentication failed (401): replace the API key in Settings or RUNPOD_API_KEY")
+			return data, resp.StatusCode, errors.New("RunPod 인증 실패(401): RunPod Settings > API Keys에서 새 API key를 생성해 실제 값을 다시 저장하세요. Endpoint ID나 가려진 key(****)를 API key 칸에 넣으면 인증되지 않습니다")
+		}
+		if resp.StatusCode == http.StatusForbidden {
+			return data, resp.StatusCode, errors.New("RunPod 권한 거부(403): 이 API key에 Serverless endpoint 실행 권한이 없습니다")
 		}
 		return data, resp.StatusCode, fmt.Errorf("RunPod API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
@@ -276,6 +285,107 @@ func (a *App) TestRunPod() (RunPodStatus, error) {
 	workers := health.Workers.Idle + health.Workers.Ready + health.Workers.Running
 	message := fmt.Sprintf("RunPod 인증 완료 · 사용 가능 worker %d", workers)
 	return RunPodStatus{OK: true, EndpointID: client.endpointID, Message: message, Workers: workers}, nil
+}
+
+type runPodJobResponse struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Error  any    `json:"error"`
+	Output struct {
+		GLB    string `json:"glb_base64"`
+		Model  string `json:"model"`
+		Format string `json:"format"`
+		Bytes  int    `json:"bytes"`
+	} `json:"output"`
+}
+
+func runPodError(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	data, _ := json.Marshal(value)
+	return string(data)
+}
+
+// runPodSync starts a job and follows the job status when runsync returns before
+// long-running 3D inference has completed (the normal behavior after RunPod's wait window).
+func (c *runPodClient) runPodSync(ctx context.Context, payload any) (runPodJobResponse, error) {
+	data, _, err := c.request(ctx, http.MethodPost, "runsync", payload)
+	if err != nil {
+		return runPodJobResponse{}, err
+	}
+	var response runPodJobResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return response, errors.New("RunPod returned an invalid generation response")
+	}
+	for response.Status == "IN_QUEUE" || response.Status == "IN_PROGRESS" {
+		if response.ID == "" {
+			return response, errors.New("RunPod job response is missing its ID")
+		}
+		select {
+		case <-ctx.Done():
+			return response, fmt.Errorf("RunPod generation timeout: %w", ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
+		data, _, err = c.request(ctx, http.MethodGet, "status/"+url.PathEscape(response.ID), nil)
+		if err != nil {
+			return response, err
+		}
+		if err := json.Unmarshal(data, &response); err != nil {
+			return response, errors.New("RunPod returned an invalid job status")
+		}
+	}
+	if response.Status != "COMPLETED" {
+		detail := runPodError(response.Error)
+		if detail == "" {
+			detail = "job ended with status " + response.Status
+		}
+		return response, fmt.Errorf("RunPod reconstruction failed: %s", detail)
+	}
+	return response, nil
+}
+
+func (a *App) runPodReconstruct(imagePath, workspace string) (Artifact, error) {
+	client, err := a.runPodClient()
+	if err != nil {
+		return Artifact{}, err
+	}
+	image, err := os.ReadFile(imagePath)
+	if err != nil {
+		return Artifact{}, fmt.Errorf("read reconstruction input: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	payload := map[string]any{"input": map[string]any{
+		"image": base64.StdEncoding.EncodeToString(image), "seed": 1234,
+		"steps": 30, "guidance_scale": 5.0,
+	}}
+	response, err := client.runPodSync(ctx, payload)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if response.Output.GLB == "" {
+		return Artifact{}, errors.New("RunPod completed without a GLB output")
+	}
+	glb, err := base64.StdEncoding.DecodeString(response.Output.GLB)
+	if err != nil || len(glb) < 4 || string(glb[:4]) != "glTF" {
+		return Artifact{}, errors.New("RunPod output is not a valid GLB")
+	}
+	dir := filepath.Join(workspace, "reconstruct")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return Artifact{}, err
+	}
+	path := filepath.Join(dir, "hunyuan3d21.glb")
+	if err := os.WriteFile(path, glb, 0644); err != nil {
+		return Artifact{}, err
+	}
+	return Artifact{Stage: "reconstruct", Kind: "mesh", Path: path, Metrics: map[string]any{
+		"adapter": "runpod-hunyuan3d21", "model": response.Output.Model,
+		"bytes": len(glb), "previewOnly": false,
+	}}, nil
 }
 
 // ClearRunPodConfig removes a stale key so the app can explicitly fall back to environment credentials.

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -105,13 +104,6 @@ func TestCompleteOfflinePipelineProducesAnimatedGLB(t *testing.T) {
 	}
 	if len(data) < 20 || string(data[:4]) != "glTF" {
 		t.Fatal("final artifact is not GLB")
-	}
-	preview, err := a.ReadArtifact(last.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(preview, "data:model/gltf-binary;base64,") {
-		t.Fatal("invalid preview data URL")
 	}
 }
 

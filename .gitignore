@@ -3,3 +3,9 @@ frontend/dist/
 build/bin/
 .DS_Store
 *.log
+
+# RunPod credentials and generated deployment state
+runpod-deployment.json
+**/runpod.json
+.env
+.env.*

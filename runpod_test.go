@@ -37,7 +37,7 @@ func TestRunPod401IsActionableAndDoesNotLeakKey(t *testing.T) {
 	defer srv.Close()
 	c := &runPodClient{baseURL: srv.URL, endpointID: "endpoint", apiKey: "do-not-leak", http: srv.Client()}
 	_, _, err := c.request(context.Background(), http.MethodGet, "health", nil)
-	if err == nil || !strings.Contains(err.Error(), "401") {
+	if err == nil || !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "새 API key") {
 		t.Fatalf("expected 401 error, got %v", err)
 	}
 	if strings.Contains(err.Error(), c.apiKey) {
@@ -51,6 +51,9 @@ func TestNormalizeRunPodAPIKey(t *testing.T) {
 		"Bearer secret-token":           "secret-token",
 		"RUNPOD_API_KEY='secret-token'": "secret-token",
 		`RUNPOD_API_KEY="secret-token"`: "secret-token",
+		"Bearer RUNPOD_SECRET":          "RUNPOD_SECRET",
+		"••••••••":                      "",
+		"********":                      "",
 	}
 	for input, want := range cases {
 		if got := normalizeRunPodAPIKey(input); got != want {
