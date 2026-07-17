@@ -57,7 +57,7 @@ nav{display:grid;gap:4px}
 nav button,.aside-bottom button{border:0;background:none;padding:11px 13px;border-radius:9px;text-align:left;display:flex;gap:11px;color:var(--text-2);align-items:center;font-weight:500;transition:background .15s,color .15s}
 nav svg,.aside-bottom svg{width:17px}
 nav button:hover,.aside-bottom button:hover{background:var(--surface-2);color:var(--text)}
-nav button.active,.aside-bottom button.active{background:var(--accent-soft);color:var(--accent);font-weight:600;box-shadow:inset 2.5px 0 var(--accent)}
+nav button.active,.aside-bottom button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .aside-bottom{margin-top:auto;border-top:1px solid var(--border);padding-top:12px}
 .compute{margin:14px 5px 0;padding:12px 13px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px}
 .compute span{display:block;font-size:11px;font-weight:600;color:var(--text)}
@@ -195,7 +195,7 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .clip-list{display:grid;gap:8px;margin-top:18px}
 .clip-list>button{display:grid;grid-template-columns:38px 1fr auto;align-items:center;gap:10px;text-align:left;border:1px solid var(--border);background:var(--surface);border-radius:10px;padding:8px;color:var(--text-2);transition:border-color .15s,background .15s}
 .clip-list>button:hover{border-color:var(--accent-border)}
-.clip-list>button.selected{border-color:var(--accent);background:var(--accent-soft);color:var(--text);box-shadow:inset 2.5px 0 var(--accent)}
+.clip-list>button.selected{border-color:var(--accent);background:var(--accent-soft);color:var(--text)}
 .clip-icon{width:34px;height:34px;background:var(--surface-2);border:1px solid var(--border);display:grid;place-items:center;border-radius:8px}
 .clip-list>button.selected .clip-icon{background:#fff;color:var(--accent);border-color:var(--accent-border)}
 .clip-icon svg{width:15px}
