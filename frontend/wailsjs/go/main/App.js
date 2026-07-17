@@ -18,6 +18,10 @@ export function ListJobs() {
   return window['go']['main']['App']['ListJobs']();
 }
 
+export function OpenExternal(arg1) {
+  return window['go']['main']['App']['OpenExternal'](arg1);
+}
+
 export function OpenWorkspace(arg1) {
   return window['go']['main']['App']['OpenWorkspace'](arg1);
 }

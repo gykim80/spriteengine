@@ -318,6 +318,19 @@ func (a *App) OpenWorkspace(id string) error {
 	}
 	return errors.New("job not found")
 }
+func (a *App) OpenExternal(url string) error {
+	if a.ctx == nil {
+		return errors.New("application is not ready")
+	}
+	allowed := []string{"https://itch.io/", "https://quaternius.com/", "https://www.mixamo.com/", "https://www.reallusion.com/", "https://github.com/"}
+	for _, prefix := range allowed {
+		if strings.HasPrefix(url, prefix) {
+			wailsruntime.BrowserOpenURL(a.ctx, url)
+			return nil
+		}
+	}
+	return errors.New("external URL is not allowed")
+}
 func (a *App) SystemInfo() SystemInfo {
 	_, e := exec.LookPath("python3")
 	return SystemInfo{runtime.GOOS + "/" + runtime.GOARCH + " · Wails · Three.js", a.rootPath(), len(a.jobs), e == nil}

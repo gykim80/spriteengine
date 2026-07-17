@@ -10,6 +10,8 @@ export function ImportReference():Promise<main.Job>;
 
 export function ListJobs():Promise<Array<main.Job>>;
 
+export function OpenExternal(arg1:string):Promise<void>;
+
 export function OpenWorkspace(arg1:string):Promise<void>;
 
 export function RunNextStage(arg1:string):Promise<main.Job>;

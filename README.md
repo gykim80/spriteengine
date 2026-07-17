@@ -5,7 +5,10 @@
 ## 구현 범위
 
 - Wails v2 + Go orchestration, React/TypeScript UI
-- Three.js interactive character/skeleton preview와 motion preview
+- Three.js interactive skinned GLB preview와 실제 embedded motion playback
+- Motion Lab clip browser, play/pause, timeline scrubbing, speed, crossfade, skeleton overlay
+- local GLB/GLTF import 및 embedded animation 자동 탐색
+- Itch.io, Quaternius, Mixamo, ActorCore license-aware source library
 - native reference image import, workspace 복사, SHA-256 provenance
 - `queued → ready → running → done|failed` pipeline state machine
 - embedded Python JSON Lines worker 실행 및 Wails progress events
@@ -13,12 +16,14 @@
 - image cleanup → reconstruction → retopology → auto-rig → motion → export stage UI
 - GitHub, 논문, license 및 품질 gate 조사
 
-현재 baseline worker는 실제 이미지 형식과 provenance를 검증하고 prepared artifact를 생성합니다. GPU model이 필요한 stage는 adapter request artifact를 생성하여 pipeline integration을 검증하며, 가짜 3D 결과를 만들지 않습니다.
+현재 baseline worker는 실제 이미지 형식과 provenance를 검증하고 prepared artifact를 생성합니다. GPU model이 필요한 reconstruction/auto-rig stage는 adapter request artifact를 생성하므로 아직 model weights를 실행하는 production inference가 아닙니다. 반면 Motion Lab은 bundled skinned GLB의 Idle/Walk/Run clip을 Three.js `AnimationMixer`로 실제 재생하며, 사용자가 가진 animated GLB/GLTF도 local import할 수 있습니다.
 
 ## 문서
 
 - [Research와 product plan](docs/RESEARCH.md)
+- [2025–2026 motion/rigging update](docs/RESEARCH_2026.md)
 - [Runtime architecture와 worker protocol](docs/ARCHITECTURE.md)
+- [Bundled Motion Lab asset provenance](docs/licenses/MOTION_DEMO_ASSET.md)
 
 ## 검증
 
