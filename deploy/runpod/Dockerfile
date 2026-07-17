@@ -12,10 +12,10 @@ RUN python3 -m pip install --upgrade pip && \
 WORKDIR /opt
 RUN git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git hunyuan && \
     sed -i '/^--extra-index-url/d; /^torchmetrics==/d; /^tb_nightly==/d; /^deepspeed$/d; /^bpy==/d' /opt/hunyuan/requirements.txt && \
-    pip install -r /opt/hunyuan/requirements.txt && pip install runpod && \
-    cd /opt/hunyuan/hy3dshape && pip install -e .
-RUN cd /opt/hunyuan/hy3dpaint/custom_rasterizer && pip install -e . && \
-    cd /opt/hunyuan/hy3dpaint/DifferentiableRenderer && bash compile_mesh_painter.sh
+    pip install -r /opt/hunyuan/requirements.txt && pip install 'runpod==1.7.13'
+# Shape-only inference does not need the Hunyuan paint CUDA rasterizers.
+# Keeping them out cuts image size/build time and avoids compiling GPU-specific
+# extensions that the serverless handler never imports.
 
 FROM build AS runtime
 ENV PYOPENGL_PLATFORM=egl HF_HOME=/runpod-volume/huggingface \
