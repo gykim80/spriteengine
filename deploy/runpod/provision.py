@@ -40,7 +40,7 @@ def find_named(key, path, name):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--image", required=True, help="Public Docker image, including immutable tag")
-    p.add_argument("--region", default="US-KS-2")
+    p.add_argument("--region", default="US-CA-2")
     p.add_argument("--volume-gb", type=int, default=100)
     p.add_argument("--gpu", action="append", dest="gpus")
     p.add_argument("--output", default="runpod-deployment.json")

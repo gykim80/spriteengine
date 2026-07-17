@@ -4,22 +4,32 @@ Production worker는 **Hunyuan3D-2.1 shape pipeline**으로 입력 이미지를 
 
 ## Architecture
 
-- Image: `deploy/runpod/Dockerfile`
-- Handler: `deploy/runpod/handler.py`
-- Provisioner: `deploy/runpod/provision.py`
+- Worker repo: `https://github.com/gykim80/spriteengine-hunyuan3d-worker` (RunPod GitHub 연동 빌드)
+- Image: worker repo 루트 `Dockerfile` (원본: `deploy/runpod/Dockerfile`)
+- Handler: `handler.py` (원본: `deploy/runpod/handler.py`)
+- Volume warm-up: `deploy/runpod/warm_volume.py` — weights를 로컬이 아닌 RunPod network volume에 직접 다운로드
 - GPU preference: A100 80GB → H100 80GB → L40S
 - Scale: min 0 / max 1, 5초 idle timeout
-- Persistent volume: 100GB, model weights 전용
+- Persistent volume: `spriteengine-model-cache` 100GB, **US-CA-2** (network volume 지원 region), model weights 전용
 - Request timeout: 15분
 
-## Deployment prerequisites
+## Deployment flow (GitHub integration)
 
-1. Repository를 GitHub에 push하면 workflow가 GHCR image를 build/push한다.
-2. RunPod API key를 `RUNPOD_API_KEY` environment variable로 제공한다.
-3. `provision.py --image ghcr.io/<owner>/spriteengine-hunyuan3d21:latest`를 실행한다.
-4. 출력된 endpoint ID와 API key를 Studio Settings에 저장한다.
+RunPod이 GitHub repo를 직접 clone하여 RunPod 인프라에서 이미지를 빌드하므로 GHCR push가 필요 없다. (기존 GHCR workflow는 제거됨 — GitHub Actions는 계정 billing lock으로 실행 불가하며, 어차피 불필요하다.)
 
-Provisioning은 동일 이름 resource를 재사용하는 idempotent 방식이다. Network volume은 지정 region에 endpoint보다 먼저 만들어져야 한다. API key와 generated deployment manifest는 commit하지 않는다.
+1. Network volume 생성 + weights pre-download (로컬 다운로드 없음):
+   ```sh
+   RUNPOD_API_KEY=... python3 deploy/runpod/warm_volume.py
+   ```
+   임시 CPU pod가 `tencent/Hunyuan3D-2.1`을 `/runpod-volume/huggingface`에 받고 자동 종료된다.
+2. RunPod Console → Serverless → New Endpoint → **GitHub Repo** → `spriteengine-hunyuan3d-worker` 선택
+   - Branch `main`, Dockerfile path `Dockerfile`
+   - GPU: A100 80GB / H100 80GB / L40S, workers 0~1, idle timeout 5s, execution timeout 900s
+   - Network volume `spriteengine-model-cache` attach (mount `/runpod-volume`)
+   - Datacenter는 volume region(US-CA-2)과 일치해야 한다
+3. 생성된 endpoint ID와 API key를 Studio Settings에 저장한다.
+
+`provision.py`는 registry image 기반 대체 경로(idempotent)로 유지한다. Network volume은 endpoint보다 먼저 만들어져야 하며, network volume을 지원하는 region(US-CA-2 등)만 사용할 수 있다. API key와 deployment manifest는 commit하지 않는다.
 
 ## 401 authentication 복구
 

@@ -127,7 +127,7 @@ def wait_for_exit(key, pod_id, timeout_minutes):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", default="tencent/Hunyuan3D-2.1")
-    p.add_argument("--region", default="US-KS-2")
+    p.add_argument("--region", default="US-CA-2")
     p.add_argument("--volume-gb", type=int, default=100)
     p.add_argument("--timeout-minutes", type=int, default=120)
     p.add_argument("--keep-pod", action="store_true", help="Skip terminating the pod after exit")
