@@ -25,14 +25,14 @@ export default function Sidebar({view, onNavigate, runpodConfigured, running, se
       <nav>
         <span className="nav-label">MENU</span>
         {menu.map(([v, label, Icon, sub]) => (
-          <button key={v} className={view === v ? 'active' : ''} onClick={() => onNavigate(v)}>
+          <button key={v} className={view === v ? 'active' : ''} aria-current={view === v ? 'page' : undefined} onClick={() => onNavigate(v)}>
             <Icon />
             <span className="nav-text"><b>{label}</b><small>{sub}</small></span>
           </button>
         ))}
       </nav>
       <div className="aside-bottom">
-        <button className={view === 'settings' ? 'active' : ''} onClick={() => onNavigate('settings')}>
+        <button className={view === 'settings' ? 'active' : ''} aria-current={view === 'settings' ? 'page' : undefined} onClick={() => onNavigate('settings')}>
           <Settings />Settings
         </button>
         <div className="compute">
