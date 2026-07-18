@@ -1,6 +1,6 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {Clapperboard} from 'lucide-react';
-import {api} from '../api';
+import {api, errText} from '../api';
 import type {Job, StudioTab} from '../types';
 import PipelinePanel from '../components/studio/PipelinePanel';
 import MotionPanel from '../components/studio/MotionPanel';
@@ -72,7 +72,7 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
       const u = await api.readArtifact(path);
       if (u) { setPreviewUrl(u); setTab('motion'); setNotice('Artifact가 Motion 탭에 로드되었습니다.'); }
     } catch (e) {
-      setNotice(String(e));
+      setNotice(errText(e));
     }
   }
 

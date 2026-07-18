@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {Check, FolderOpen, ImagePlus, Layers3, MoreHorizontal, Pencil, Plus, Trash2, X} from 'lucide-react';
-import {api} from '../api';
+import {api, errText} from '../api';
 import type {Job} from '../types';
 
 type Props = {
@@ -95,7 +95,7 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
   }
   async function openWorkspace(id: string) {
     setMenuFor(null);
-    try { await api.openWorkspace(id); } catch (e) { setNotice(String(e)); }
+    try { await api.openWorkspace(id); } catch (e) { setNotice(errText(e)); }
   }
 
   return (
