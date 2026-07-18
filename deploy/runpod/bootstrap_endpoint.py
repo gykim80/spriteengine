@@ -132,6 +132,19 @@ snapshot_download("tencent/Hunyuan3D-2.1", allow_patterns=["hunyuan3d-paintpbr-v
 snapshot_download("facebook/dinov2-giant", allow_patterns=["*.json", "*.safetensors", "*.txt"])
 print("paint weights warmed")
 PY
+    # diffusers custom_pipeline 동적 모듈 캐시 프리시드: diffusers 0.30 로더는
+    # pipeline.py의 `from .unet.modules import ...` 같은 서브패키지 상대 import를
+    # 캐시(HF_HOME/modules/diffusers_modules/local)로 복사하지 못해 첫 로드가
+    # ModuleNotFoundError(diffusers_modules.local.*)로 실패한다. 패키지/평탄 두
+    # 레이아웃을 모두 심어 어느 import 경로로도 해결되게 한다.
+    M="$V/huggingface/modules/diffusers_modules/local"
+    mkdir -p "$M"
+    touch "$V/huggingface/modules/diffusers_modules/__init__.py" "$M/__init__.py"
+    cp "$V/hunyuan3d21/hy3dpaint/hunyuanpaintpbr/pipeline.py" "$M/"
+    rm -rf "$M/unet"
+    cp -r "$V/hunyuan3d21/hy3dpaint/hunyuanpaintpbr/unet" "$M/unet"
+    touch "$M/unet/__init__.py"
+    cp "$V/hunyuan3d21/hy3dpaint/hunyuanpaintpbr/unet/"*.py "$M/"
     mkdir -p "$V/spriteengine"
     echo "$HANDLER_B64" | base64 -d > "$V/spriteengine/handler.py"
     PYTHONPATH="$V/pydeps311:$V/hunyuan3d21/hy3dshape" python3 - <<'PY'
@@ -147,6 +160,10 @@ import bpy
 from DifferentiableRenderer.mesh_inpaint_processor import meshVerticeInpaint
 # 전체 paint 파이프라인 모듈을 import해 누락 의존성(bpy 등)을 여기서 잡는다.
 import textureGenPipeline
+# 프리시드한 diffusers 동적 모듈 캐시가 실제로 import 가능한지 검증 (평탄+패키지)
+sys.path.insert(0, "/runpod-volume/huggingface/modules")
+import diffusers_modules.local.modules
+import diffusers_modules.local.pipeline
 print("imports ok:", Hunyuan3DDiTFlowMatchingPipeline.__name__, "+ paint deps + bpy", bpy.app.version_string)
 PY
     touch "$V/.spriteengine-bootstrap-complete"
