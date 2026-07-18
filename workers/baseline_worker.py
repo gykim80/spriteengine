@@ -139,6 +139,152 @@ def _append_view(gltf, bin_data, blob):
     return len(gltf["bufferViews"]) - 1
 
 
+def auto_rig(glb_path, output_path):
+    """Static mesh에 바운딩박스 기반 휴머노이드 skeleton을 추가한다.
+
+    이미 skins가 있으면 False(패스스루)를 반환한다. 성공 시 output_path에
+    JOINTS_0/WEIGHTS_0가 추가된 skinned GLB를 쓰고 True를 반환한다.
+    """
+    gltf, bin_data = _read_glb(glb_path)
+    if gltf.get("skins"):
+        return False  # 이미 리깅된 GLB
+    buffers = gltf.get("buffers") or []
+    if not buffers or "uri" in buffers[0]:
+        return False  # 외부 버퍼
+
+    # 1. 전체 메시 AABB -------------------------------------------------
+    all_pos = []
+    for mesh in gltf.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            pid = prim.get("attributes", {}).get("POSITION")
+            if pid is not None:
+                all_pos.extend(_read_vec3(gltf, bin_data, pid, "POSITION"))
+    if not all_pos:
+        return False
+
+    xs = [p[0] for p in all_pos]; ys = [p[1] for p in all_pos]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    cx = (min_x + max_x) / 2
+    cz = (min([p[2] for p in all_pos]) + max([p[2] for p in all_pos])) / 2
+    w = (max_x - min_x) or 1.0
+    h = (max_y - min_y) or 1.0
+
+    # 2. 조인트 정의 (name, 월드 위치, 부모 이름) -------------------------
+    JDEF = [
+        ("Hips",         (cx,          min_y + h*.52, cz), None),
+        ("Spine",        (cx,          min_y + h*.62, cz), "Hips"),
+        ("Chest",        (cx,          min_y + h*.73, cz), "Spine"),
+        ("Head",         (cx,          min_y + h*.88, cz), "Chest"),
+        ("LeftUpLeg",    (cx - w*.13,  min_y + h*.48, cz), "Hips"),
+        ("LeftLeg",      (cx - w*.13,  min_y + h*.27, cz), "LeftUpLeg"),
+        ("LeftFoot",     (cx - w*.13,  min_y + h*.04, cz), "LeftLeg"),
+        ("RightUpLeg",   (cx + w*.13,  min_y + h*.48, cz), "Hips"),
+        ("RightLeg",     (cx + w*.13,  min_y + h*.27, cz), "RightUpLeg"),
+        ("RightFoot",    (cx + w*.13,  min_y + h*.04, cz), "RightLeg"),
+        ("LeftArm",      (cx - w*.30,  min_y + h*.73, cz), "Chest"),
+        ("LeftForeArm",  (cx - w*.44,  min_y + h*.62, cz), "LeftArm"),
+        ("RightArm",     (cx + w*.30,  min_y + h*.73, cz), "Chest"),
+        ("RightForeArm", (cx + w*.44,  min_y + h*.62, cz), "RightArm"),
+    ]
+    JNAMES = [j[0] for j in JDEF]
+    JWORLD = {j[0]: j[1] for j in JDEF}
+
+    # 3. glTF 노드 삽입 --------------------------------------------------
+    gltf.setdefault("nodes", [])
+    base = len(gltf["nodes"])
+    name_to_node = {name: base + i for i, (name, _, _) in enumerate(JDEF)}
+    for name, wpos, parent in JDEF:
+        pw = JWORLD[parent] if parent else (0.0, 0.0, 0.0)
+        translation = [wpos[k] - pw[k] for k in range(3)]
+        children = [name_to_node[n] for n, _, p in JDEF if p == name]
+        node = {"name": name, "translation": translation}
+        if children:
+            node["children"] = children
+        gltf["nodes"].append(node)
+
+    # root joint을 scene 0의 nodes 목록에도 추가해 렌더러가 인식하도록 함
+    gltf.setdefault("scenes", [{}])
+    gltf["scenes"][0].setdefault("nodes", []).append(name_to_node["Hips"])
+
+    # 4. 인버스 바인드 행렬 (column-major 4×4, 순수 이동 역변환) ----------
+    ibm_bytes = bytearray()
+    for name in JNAMES:
+        px, py, pz = JWORLD[name]
+        ibm_bytes += struct.pack("<16f",
+            1, 0, 0, 0,   0, 1, 0, 0,   0, 0, 1, 0,   -px, -py, -pz, 1)
+    ibm_view = _append_view(gltf, bin_data, ibm_bytes)
+    gltf.setdefault("accessors", []).append({
+        "bufferView": ibm_view, "componentType": 5126,
+        "count": len(JNAMES), "type": "MAT4",
+    })
+    ibm_acc = len(gltf["accessors"]) - 1
+
+    # skin 등록
+    gltf["skins"] = [{
+        "name": "AutoHumanoidRig",
+        "joints": [name_to_node[n] for n in JNAMES],
+        "inverseBindMatrices": ibm_acc,
+        "skeleton": name_to_node["Hips"],
+    }]
+
+    # 5. 버텍스 조인트 / 가중치 할당 (영역 기반) -------------------------
+    def nearest_joint(x, y):
+        yn = (y - min_y) / h       # 0=bottom 1=top
+        if yn < 0.08:
+            return "LeftFoot" if x < cx else "RightFoot"
+        if yn < 0.30:
+            return "LeftLeg"  if x < cx else "RightLeg"
+        if yn < 0.44:
+            return "LeftUpLeg" if x < cx else "RightUpLeg"
+        if yn < 0.58:
+            return "Hips"
+        if yn < 0.79:
+            if x < cx - w * 0.22:
+                return "LeftForeArm" if yn < 0.67 else "LeftArm"
+            if x > cx + w * 0.22:
+                return "RightForeArm" if yn < 0.67 else "RightArm"
+            return "Spine" if yn < 0.68 else "Chest"
+        return "Head"
+
+    for mesh in gltf.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            attrs = prim.get("attributes", {})
+            pid = attrs.get("POSITION")
+            if pid is None:
+                continue
+            positions = _read_vec3(gltf, bin_data, pid, "POSITION")
+            n_verts = len(positions)
+            j_bytes = bytearray()
+            w_bytes = bytearray()
+            for x, y, z in positions:
+                jname = nearest_joint(x, y)
+                ji = JNAMES.index(jname)
+                j_bytes += struct.pack("<4H", ji, 0, 0, 0)
+                w_bytes += struct.pack("<4f", 1.0, 0.0, 0.0, 0.0)
+            jv = _append_view(gltf, bin_data, j_bytes)
+            wv = _append_view(gltf, bin_data, w_bytes)
+            gltf["accessors"].append({
+                "bufferView": jv, "componentType": 5123,
+                "count": n_verts, "type": "VEC4",
+            })
+            gltf["accessors"].append({
+                "bufferView": wv, "componentType": 5126,
+                "count": n_verts, "type": "VEC4",
+            })
+            attrs["JOINTS_0"]  = len(gltf["accessors"]) - 2
+            attrs["WEIGHTS_0"] = len(gltf["accessors"]) - 1
+
+    # 6. 메시 노드에 skin 인덱스 연결 -------------------------------------
+    for node in gltf.get("nodes", []):
+        if "mesh" in node and "skin" not in node:
+            node["skin"] = 0
+
+    gltf["buffers"][0]["byteLength"] = len(bin_data)
+    _write_glb(gltf, bin_data, output_path)
+    return True
+
+
 def find_reference_image(workspace):
     prepare_dir = os.path.join(workspace, "prepare")
     if not os.path.isdir(prepare_dir):
@@ -274,6 +420,15 @@ def run(req):
                     baked = bake_texture(source, reference, output)
                 except Exception as exc:
                     emit("progress", jobId=job, progress=.5, message=f"Texture projection skipped: {exc}")
+        elif stage == "rig":
+            # skeleton이 없는 static mesh에 바운딩박스 기반 humanoid rig을 추가.
+            emit("progress", jobId=job, progress=.35, message="Fitting humanoid skeleton to mesh bounds")
+            try:
+                baked = auto_rig(source, output)
+                if baked:
+                    metrics = {"adapter": "auto-rig-bbox", "validated": True, "skinned": True, "previewOnly": True}
+            except Exception as exc:
+                emit("progress", jobId=job, progress=.5, message=f"Auto-rig skipped: {exc}")
         if baked:
             metrics = {"adapter": "front-projection-offline", "validated": True, "textured": True, "previewOnly": True}
         else:

@@ -154,5 +154,106 @@ class BakeTextureTest(unittest.TestCase):
         self.assertEqual(worker.find_reference_image(ws), ref)
 
 
+def make_static_glb(path):
+    """스켈레톤 없는 단순 직사각형 GLB — auto_rig 입력용."""
+    positions = [(-0.3, 0.0, -0.3), (0.3, 0.0, -0.3), (0.3, 1.8, -0.3), (-0.3, 1.8, -0.3),
+                 (-0.3, 0.0,  0.3), (0.3, 0.0,  0.3), (0.3, 1.8,  0.3), (-0.3, 1.8,  0.3)]
+    faces = [0,1,2, 0,2,3, 4,5,6, 4,6,7, 0,4,7, 0,7,3, 1,5,6, 1,6,2, 0,1,5, 0,5,4, 3,2,6, 3,6,7]
+    buf = bytearray()
+    for v in positions:
+        buf += struct.pack("<fff", *v)
+    idx_off = len(buf)
+    for i in faces:
+        buf += struct.pack("<H", i)
+    gltf = {
+        "asset": {"version": "2.0"}, "scene": 0,
+        "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+        "buffers": [{"byteLength": len(buf)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 96},
+            {"buffer": 0, "byteOffset": 96, "byteLength": len(buf) - 96},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 8, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5123, "count": len(faces), "type": "SCALAR"},
+        ],
+    }
+    worker._write_glb(gltf, buf, path)
+
+
+class AutoRigTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-autorig-")
+        self.addCleanup(self.tmp.cleanup)
+        self.glb = os.path.join(self.tmp.name, "static.glb")
+        self.out = os.path.join(self.tmp.name, "rigged.glb")
+
+    def test_adds_skin_and_joints(self):
+        make_static_glb(self.glb)
+        self.assertTrue(worker.auto_rig(self.glb, self.out))
+        gltf, _ = worker._read_glb(self.out)
+        self.assertEqual(len(gltf.get("skins", [])), 1)
+        skin = gltf["skins"][0]
+        self.assertEqual(skin["name"], "AutoHumanoidRig")
+        self.assertEqual(len(skin["joints"]), 14)
+
+    def test_adds_joints0_and_weights0(self):
+        make_static_glb(self.glb)
+        worker.auto_rig(self.glb, self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        self.assertIn("JOINTS_0", attrs)
+        self.assertIn("WEIGHTS_0", attrs)
+        # WEIGHTS_0 accessor: each vertex has one dominant weight = 1.0
+        acc = gltf["accessors"][attrs["WEIGHTS_0"]]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        base = view["byteOffset"]
+        for i in range(acc["count"]):
+            w0 = struct.unpack_from("<f", bin_data, base + i * 16)[0]
+            self.assertAlmostEqual(w0, 1.0, places=5)
+
+    def test_glb_structure_valid(self):
+        make_static_glb(self.glb)
+        worker.auto_rig(self.glb, self.out)
+        data = open(self.out, "rb").read()
+        magic, version, total = struct.unpack("<III", data[:12])
+        self.assertEqual((magic, version, total), (worker.GLB_MAGIC, 2, len(data)))
+        gltf, bin_data = worker._read_glb(self.out)
+        self.assertEqual(gltf["buffers"][0]["byteLength"], len(bin_data))
+        for view in gltf["bufferViews"]:
+            self.assertLessEqual(view.get("byteOffset", 0) + view["byteLength"], len(bin_data))
+
+    def test_passthrough_when_already_skinned(self):
+        # procedural_character.py 출력처럼 이미 skin이 있으면 False 반환
+        make_static_glb(self.glb)
+        worker.auto_rig(self.glb, self.out)  # first pass adds skin
+        out2 = os.path.join(self.tmp.name, "rigged2.glb")
+        self.assertFalse(worker.auto_rig(self.out, out2))
+        self.assertFalse(os.path.exists(out2))
+
+    def test_weight_regions(self):
+        """하체 버텍스는 하체 조인트, 상체는 상체 조인트에 할당된다."""
+        make_static_glb(self.glb)
+        worker.auto_rig(self.glb, self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        skin = gltf["skins"][0]
+        joint_nodes = skin["joints"]
+        node_name = {n: gltf["nodes"][n]["name"] for n in joint_nodes}
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        pos_acc = gltf["accessors"][attrs["POSITION"]]
+        positions = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+        acc = gltf["accessors"][attrs["JOINTS_0"]]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        base = view["byteOffset"]
+        for i, (x, y, z) in enumerate(positions):
+            ji = struct.unpack_from("<H", bin_data, base + i * 8)[0]
+            jname = node_name[joint_nodes[ji]]
+            if y < 0.1 * 1.8:
+                self.assertIn("Foot", jname, f"vertex at y={y:.2f} should be Foot, got {jname}")
+            elif y > 0.8 * 1.8:
+                self.assertEqual(jname, "Head", f"vertex at y={y:.2f} should be Head, got {jname}")
+
+
 if __name__ == "__main__":
     unittest.main()
