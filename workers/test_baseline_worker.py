@@ -154,10 +154,11 @@ class BakeTextureTest(unittest.TestCase):
         self.assertEqual(worker.find_reference_image(ws), ref)
 
 
-def make_static_glb(path):
+def make_static_glb(path, scale=1.0):
     """스켈레톤 없는 단순 직사각형 GLB — auto_rig 입력용."""
     positions = [(-0.3, 0.0, -0.3), (0.3, 0.0, -0.3), (0.3, 1.8, -0.3), (-0.3, 1.8, -0.3),
                  (-0.3, 0.0,  0.3), (0.3, 0.0,  0.3), (0.3, 1.8,  0.3), (-0.3, 1.8,  0.3)]
+    positions = [(x * scale, y * scale, z * scale) for x, y, z in positions]
     faces = [0,1,2, 0,2,3, 4,5,6, 4,6,7, 0,4,7, 0,7,3, 1,5,6, 1,6,2, 0,1,5, 0,5,4, 3,2,6, 3,6,7]
     buf = bytearray()
     for v in positions:
@@ -255,6 +256,44 @@ class AutoRigTest(unittest.TestCase):
                 self.assertIn("Foot", jname, f"vertex at y={y:.2f} should be Foot, got {jname}")
             elif y > 0.8 * 1.8:
                 self.assertEqual(jname, "Head", f"vertex at y={y:.2f} should be Head, got {jname}")
+
+
+class ScaleNormalizeTest(unittest.TestCase):
+    """복원 스케일 이상치(예: cowboy 키 0.494 — 표준 1.987의 1/4)가 리깅 시
+    표준 키로 정규화되는지의 회귀 테스트. HY-Motion 루트 이동 리타게팅이
+    캐릭터 키에 비례하므로, 정규화 없이는 이동 모션이 제자리걸음으로 퇴화한다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-scale-")
+        self.addCleanup(self.tmp.cleanup)
+        self.glb = os.path.join(self.tmp.name, "static.glb")
+        self.out = os.path.join(self.tmp.name, "rigged.glb")
+
+    def mesh_height(self, path):
+        gltf, bin_data = worker._read_glb(path)
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        ys = [p[1] for p in worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")]
+        return max(ys) - min(ys)
+
+    def test_undersized_mesh_normalized_to_standard_height(self):
+        make_static_glb(self.glb, scale=0.25)  # 키 0.45 — cowboy 이상치 재현
+        self.assertTrue(worker.auto_rig(self.glb, self.out))
+        self.assertAlmostEqual(self.mesh_height(self.out),
+                               worker.STANDARD_CHARACTER_HEIGHT, places=4)
+
+    def test_normal_mesh_untouched(self):
+        make_static_glb(self.glb)  # 키 1.8 — 정상 범위
+        worker.auto_rig(self.glb, self.out)
+        self.assertAlmostEqual(self.mesh_height(self.out), 1.8, places=5)
+
+    def test_joints_follow_normalized_scale(self):
+        make_static_glb(self.glb, scale=0.25)
+        worker.auto_rig(self.glb, self.out)
+        gltf, _ = worker._read_glb(self.out)
+        hips = next(n for n in gltf["nodes"] if n.get("name") == "Hips")
+        # Hips는 키의 52% 지점 — 정규화된 키 기준이어야 한다.
+        self.assertAlmostEqual(hips["translation"][1],
+                               worker.STANDARD_CHARACTER_HEIGHT * 0.52, places=3)
 
 
 Q_NEG90X = [-0.7071067811865475, 0.0, 0.0, 0.7071067811865476]  # X축 -90°: 로컬 Z-up → Y-up

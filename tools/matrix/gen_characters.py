@@ -46,8 +46,11 @@ CHARACTERS_SET2 = {
     "scientist":  "a scientist in a white lab coat with safety goggles on the forehead",
     "farmer":     "a friendly farmer in denim overalls, plaid shirt and straw hat",
     "idol":       "a k-pop idol dancer in a stylish silver stage outfit",
-    "barbarian":  "a barbarian warrior with a fur loincloth, leather straps and a big axe on the back",
-    "cowboy":     "a cowboy in a brown leather vest, wide-brim hat and boots with spurs",
+    # 주의: 몸통에서 멀리 뻗는 소품(등의 큰 도끼, 넓은 모자 챙)은 실루엣을
+    # 옆으로 퍼뜨려 Hunyuan3D 복원이 누운 형태로 나오는 실패를 유발했다.
+    # 소품을 몸에 밀착시키는 프롬프트로 조정 (실측: barbarian/cowboy 복원 실패).
+    "barbarian":  "a barbarian warrior with a fur loincloth, leather straps, iron bracers and war paint, no weapons",
+    "cowboy":     "a cowboy in a brown leather vest, jeans, a snug narrow-brim cowboy hat and leather boots, no weapons",
     "clown":      "a cheerful circus clown in a colorful polka-dot outfit with a red nose and curly wig",
     "wrestler":   "a professional wrestler in a spandex singlet with a championship belt around the waist",
     "monk":       "a shaolin monk in an orange and yellow robe with prayer beads around the wrist",

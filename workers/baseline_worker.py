@@ -221,6 +221,54 @@ def _bake_mesh_node_transform(gltf, bin_data):
         node["scale"] = [1.0, 1.0, 1.0]
 
 
+# Hunyuan3D-2.1 정상 출력의 캐릭터 키 (실측 24종 전부 ~1.987). 복원이 간혹
+# 표준에서 크게 벗어난 스케일로 나오면(실측: cowboy 0.494 — 1/4 크기),
+# HY-Motion 루트 이동 리타게팅 스케일도 캐릭터 키에 비례해 함께 줄어들어
+# 이동 모션이 제자리걸음처럼 퇴화한다. 키가 정상 범위를 벗어난 경우에만
+# 표준 키로 정규화한다 (정상 출력은 no-op — 기존 산출물 불변).
+STANDARD_CHARACTER_HEIGHT = 1.987
+NORMAL_HEIGHT_RANGE = (1.2, 3.0)
+
+
+def _normalize_character_scale(gltf, bin_data):
+    """캐릭터 키(Y 범위)가 정상 범위 밖이면 표준 키로 균등 스케일한다.
+
+    _bake_mesh_node_transform() 이후(Y축=키 보장) 호출을 전제로 한다.
+    법선은 균등 스케일에 불변이므로 POSITION만 수정한다. 적용 배율을 반환한다.
+    """
+    pos_accessors = []
+    seen = set()
+    ys = []
+    for mesh in gltf.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            aid = prim.get("attributes", {}).get("POSITION")
+            if aid is None or aid in seen:
+                continue
+            seen.add(aid)
+            pos_accessors.append(aid)
+            ys.extend(p[1] for p in _read_vec3(gltf, bin_data, aid, "POSITION"))
+    if not ys:
+        return 1.0
+    height = max(ys) - min(ys)
+    if height <= 0 or NORMAL_HEIGHT_RANGE[0] <= height <= NORMAL_HEIGHT_RANGE[1]:
+        return 1.0
+    s = STANDARD_CHARACTER_HEIGHT / height
+    for aid in pos_accessors:
+        acc = gltf["accessors"][aid]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        stride = view.get("byteStride", 12)
+        base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        for i in range(acc["count"]):
+            off = base + i * stride
+            x, y, z = struct.unpack_from("<fff", bin_data, off)
+            struct.pack_into("<fff", bin_data, off, x * s, y * s, z * s)
+        if "min" in acc:
+            acc["min"] = [v * s for v in acc["min"]]
+        if "max" in acc:
+            acc["max"] = [v * s for v in acc["max"]]
+    return s
+
+
 def auto_rig(glb_path, output_path):
     """Static mesh에 바운딩박스 기반 휴머노이드 skeleton을 추가한다.
 
@@ -237,6 +285,9 @@ def auto_rig(glb_path, output_path):
     # 스킨을 추가하면 메시 노드 자신의 TRS는 렌더러에서 무시되므로, 관절
     # 배치를 계산하기 전에 노드 트랜스폼을 버텍스에 구워 넣어 정규화한다.
     _bake_mesh_node_transform(gltf, bin_data)
+    # 복원 스케일 이상치(표준 키 대비 수배 차이)는 모션 루트 이동까지
+    # 왜곡하므로, 관절 배치 전에 표준 키로 정규화한다.
+    _normalize_character_scale(gltf, bin_data)
 
     # 1. 전체 메시 AABB -------------------------------------------------
     all_pos = []
