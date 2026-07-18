@@ -47,6 +47,11 @@ CHARACTERS_SET2 = {
     "farmer":     "a friendly farmer in denim overalls, plaid shirt and straw hat",
     "idol":       "a k-pop idol dancer in a stylish silver stage outfit",
     "barbarian":  "a barbarian warrior with a fur loincloth, leather straps and a big axe on the back",
+    "cowboy":     "a cowboy in a brown leather vest, wide-brim hat and boots with spurs",
+    "clown":      "a cheerful circus clown in a colorful polka-dot outfit with a red nose and curly wig",
+    "wrestler":   "a professional wrestler in a spandex singlet with a championship belt around the waist",
+    "monk":       "a shaolin monk in an orange and yellow robe with prayer beads around the wrist",
+    "mechanic":   "a mechanic in navy blue coveralls with a tool belt and a grease-stained cap",
 }
 
 CHARACTERS = {

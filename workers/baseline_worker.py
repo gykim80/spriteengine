@@ -314,24 +314,42 @@ def auto_rig(glb_path, output_path):
         "skeleton": name_to_node["Hips"],
     }]
 
-    # 5. 버텍스 조인트 / 가중치 할당 (영역 기반) -------------------------
-    def nearest_joint(x, y):
-        yn = (y - min_y) / h       # 0=bottom 1=top
-        if yn < 0.08:
-            return "LeftFoot" if x < cx else "RightFoot"
-        if yn < 0.30:
-            return "LeftLeg"  if x < cx else "RightLeg"
-        if yn < 0.44:
-            return "LeftUpLeg" if x < cx else "RightUpLeg"
-        if yn < 0.58:
-            return "Hips"
-        if yn < 0.79:
-            if x < cx - w * 0.22:
-                return "LeftForeArm" if yn < 0.67 else "LeftArm"
-            if x > cx + w * 0.22:
-                return "RightForeArm" if yn < 0.67 else "RightArm"
-            return "Spine" if yn < 0.68 else "Chest"
-        return "Head"
+    # 5. 버텍스 조인트/가중치 할당 — 본 세그먼트 거리 기반 2-조인트 블렌딩.
+    # 이전의 x/y 임계값 영역 방식은 어깨 경계에서 Chest↔Arm 배정이 급격히
+    # 갈려 애니메이션 시 팔이 몸통에서 찢어져 보였다. 각 조인트가 지배하는
+    # 본(조인트→자식 조인트, 말단은 연장 팁)까지의 거리로 배정하고 가까운 두
+    # 본을 역제곱 거리로 블렌딩해 경계를 연속적으로 만든다.
+    BONE_CHILD = {
+        "Hips": "Spine", "Spine": "Chest", "Chest": "Head",
+        "LeftUpLeg": "LeftLeg", "LeftLeg": "LeftFoot",
+        "RightUpLeg": "RightLeg", "RightLeg": "RightFoot",
+        "LeftArm": "LeftForeArm", "RightArm": "RightForeArm",
+    }
+    tips = {
+        "Head": (cx, max_y, cz),
+        "LeftFoot": (JWORLD["LeftFoot"][0], min_y, JWORLD["LeftFoot"][2]),
+        "RightFoot": (JWORLD["RightFoot"][0], min_y, JWORLD["RightFoot"][2]),
+    }
+    for side in ("Left", "Right"):
+        a, f = JWORLD[side + "Arm"], JWORLD[side + "ForeArm"]
+        tips[side + "ForeArm"] = tuple(f[k] + (f[k] - a[k]) for k in range(3))  # 손끝 연장
+    bones = [(ji, JWORLD[name], tips.get(name) or JWORLD[BONE_CHILD[name]])
+             for ji, name in enumerate(JNAMES)]
+
+    def _seg_dist2(p, a, b):
+        ab = [b[k] - a[k] for k in range(3)]
+        ap = [p[k] - a[k] for k in range(3)]
+        denom = sum(c * c for c in ab) or 1e-12
+        t = max(0.0, min(1.0, sum(ap[k] * ab[k] for k in range(3)) / denom))
+        return sum((ap[k] - t * ab[k]) ** 2 for k in range(3))
+
+    def joint_weights(p):
+        """지배(가까운) 조인트 우선 2개와 정규화 가중치 — (j1, j2, w1, w2)."""
+        (d1, j1), (d2, j2) = sorted((_seg_dist2(p, a, b), ji) for ji, a, b in bones)[:2]
+        if d1 < 1e-12:
+            return j1, 0, 1.0, 0.0
+        w1, w2 = 1.0 / d1, 1.0 / d2  # d는 거리 제곱 — 역제곱 가중
+        return j1, j2, w1 / (w1 + w2), w2 / (w1 + w2)
 
     for mesh in gltf.get("meshes", []):
         for prim in mesh.get("primitives", []):
@@ -343,11 +361,10 @@ def auto_rig(glb_path, output_path):
             n_verts = len(positions)
             j_bytes = bytearray()
             w_bytes = bytearray()
-            for x, y, z in positions:
-                jname = nearest_joint(x, y)
-                ji = JNAMES.index(jname)
-                j_bytes += struct.pack("<4H", ji, 0, 0, 0)
-                w_bytes += struct.pack("<4f", 1.0, 0.0, 0.0, 0.0)
+            for pos in positions:
+                j1, j2, w1, w2 = joint_weights(pos)
+                j_bytes += struct.pack("<4H", j1, j2, 0, 0)
+                w_bytes += struct.pack("<4f", w1, w2, 0.0, 0.0)
             jv = _append_view(gltf, bin_data, j_bytes)
             wv = _append_view(gltf, bin_data, w_bytes)
             gltf["accessors"].append({
@@ -402,6 +419,76 @@ def _quat_mul(a, b):
     )
 
 
+def _quat_conj(q):
+    return (-q[0], -q[1], -q[2], q[3])
+
+
+def _quat_from_to(u, v):
+    """단위벡터 u→v 최단호 회전 쿼터니언 (xyzw)."""
+    d = sum(u[k] * v[k] for k in range(3))
+    if d > 1.0 - 1e-9:
+        return (0.0, 0.0, 0.0, 1.0)
+    if d < -1.0 + 1e-9:
+        # 정반대 방향: u에 수직인 아무 축으로 180°
+        axis = (0.0, 1.0, 0.0) if abs(u[0]) > 0.9 else (1.0, 0.0, 0.0)
+        c = (u[1] * axis[2] - u[2] * axis[1],
+             u[2] * axis[0] - u[0] * axis[2],
+             u[0] * axis[1] - u[1] * axis[0])
+        n = math.sqrt(sum(x * x for x in c)) or 1.0
+        return (c[0] / n, c[1] / n, c[2] / n, 0.0)
+    c = (u[1] * v[2] - u[2] * v[1],
+         u[2] * v[0] - u[0] * v[2],
+         u[0] * v[1] - u[1] * v[0])
+    q = (c[0], c[1], c[2], 1.0 + d)
+    n = math.sqrt(sum(x * x for x in q)) or 1.0
+    return (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
+
+
+def _rig_rest_world(gltf, node_by_name):
+    """Hips에서 자식 체인을 따라 각 조인트의 rest 월드 위치를 계산한다
+    (auto_rig 조인트는 회전 없는 순수 이동 노드 — 이동 누적으로 충분)."""
+    world = {}
+    stack = [(node_by_name["Hips"], (0.0, 0.0, 0.0))]
+    while stack:
+        idx, pw = stack.pop()
+        node = gltf["nodes"][idx]
+        t = node.get("translation", [0.0, 0.0, 0.0])
+        w = (pw[0] + t[0], pw[1] + t[1], pw[2] + t[2])
+        if node.get("name"):
+            world[node["name"]] = w
+        for child in node.get("children", []):
+            stack.append((child, w))
+    return world
+
+
+def _arm_rest_deltas(gltf, node_by_name):
+    """SMPL rest(T-pose, 팔 수평)와 rig rest(A-pose, 팔 대각선)의 차이 보정.
+
+    SMPL 로컬 회전을 그대로 이식하면 rest 각도 차이만큼 팔이 추가로 꺾인다.
+    각 팔 조인트에 대해 D = (수평 팔 방향 → rig rest 팔 방향) 최단호 회전을
+    구해, 리타겟 시 q' = D_parent ⊗ q ⊗ D⁻¹로 보정한다 (두 스켈레톤 모두
+    rest 조인트 로컬 프레임이 월드축 정렬이라 이 형태로 충분).
+    반환: (delta, delta_parent) — 조인트명 → 쿼터니언(xyzw), 없으면 항등 취급.
+    """
+    world = _rig_rest_world(gltf, node_by_name)
+    delta, delta_parent = {}, {}
+    for side in ("Left", "Right"):
+        arm, fore = world.get(side + "Arm"), world.get(side + "ForeArm")
+        if not arm or not fore:
+            continue
+        v = [fore[k] - arm[k] for k in range(3)]
+        n = math.sqrt(sum(c * c for c in v))
+        if n < 1e-9:
+            continue
+        v = [c / n for c in v]
+        u = (1.0 if v[0] >= 0 else -1.0, 0.0, 0.0)  # T-pose: 같은 쪽 수평 바깥 방향
+        d = _quat_from_to(u, v)
+        delta[side + "Arm"] = d
+        delta[side + "ForeArm"] = d          # 팔뚝도 같은 대각선의 연속 — 동일 보정
+        delta_parent[side + "ForeArm"] = d   # 부모(Arm)의 delta
+    return delta, delta_parent
+
+
 _ZUP_TO_YUP = (-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5))  # X축 -90°: +Z↑ → +Y↑
 
 
@@ -429,6 +516,8 @@ def bake_animation(glb_path, motion_payload, output_path):
     # HY-Motion(HumanML3D 계열)은 Y-up이 기본; AMASS 원본 스타일 Z-up 응답이
     # 확인되면 payload.up_axis="z"로 기저 변환을 켤 수 있다.
     zup = str(motion_payload.get("up_axis", "y")).lower() == "z"
+    # SMPL rest(T-pose) ↔ rig rest(A-pose) 팔 각도 차이 보정용 rest-delta
+    arm_delta, arm_delta_parent = _arm_rest_deltas(gltf, node_by_name)
     hips_rest = gltf["nodes"][node_by_name["Hips"]].get("translation", [0.0, 0.0, 0.0])
     # 캐릭터 스케일: 메시 AABB 높이 / SMPL 신장 — 루트 이동을 캐릭터 크기에 맞춤
     ys = []
@@ -481,6 +570,12 @@ def bake_animation(glb_path, motion_payload, output_path):
                     q = _quat_mul(q, tuple(quats[f][jindex[jname]]))
                 if zup:
                     q = _convert_zup_quat(q)
+                dj = arm_delta.get(rig_name)
+                if dj:
+                    q = _quat_mul(q, _quat_conj(dj))
+                    dp = arm_delta_parent.get(rig_name)
+                    if dp:
+                        q = _quat_mul(dp, q)
                 norm = math.sqrt(sum(c * c for c in q)) or 1.0
                 blob += struct.pack("<4f", *(c / norm for c in q))
             add_channel(node, "rotation", bytes(blob), "VEC4")

@@ -205,13 +205,15 @@ class AutoRigTest(unittest.TestCase):
         attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
         self.assertIn("JOINTS_0", attrs)
         self.assertIn("WEIGHTS_0", attrs)
-        # WEIGHTS_0 accessor: each vertex has one dominant weight = 1.0
+        # WEIGHTS_0: 2-조인트 블렌딩 — 합=1, 첫 슬롯이 지배(>=0.5) 가중치
         acc = gltf["accessors"][attrs["WEIGHTS_0"]]
         view = gltf["bufferViews"][acc["bufferView"]]
         base = view["byteOffset"]
         for i in range(acc["count"]):
-            w0 = struct.unpack_from("<f", bin_data, base + i * 16)[0]
-            self.assertAlmostEqual(w0, 1.0, places=5)
+            w = struct.unpack_from("<4f", bin_data, base + i * 16)
+            self.assertAlmostEqual(sum(w), 1.0, places=5)
+            self.assertGreaterEqual(w[0], 0.5 - 1e-6)
+            self.assertEqual(w[2:], (0.0, 0.0))
 
     def test_glb_structure_valid(self):
         make_static_glb(self.glb)
@@ -468,6 +470,44 @@ class BakeAnimationTest(unittest.TestCase):
         self.assertEqual(gltf["buffers"][0]["byteLength"], len(bin_data))
         for view in gltf["bufferViews"]:
             self.assertLessEqual(view.get("byteOffset", 0) + view["byteLength"], len(bin_data))
+
+    def test_arm_rest_delta_lifts_apose_arm_to_tpose_on_identity(self):
+        """"팔 꺾임" 버그 회귀: SMPL rest는 T-pose(팔 수평)이므로 항등 쿼터니언
+        프레임에서 rig의 A-pose 대각선 팔이 수평으로 보정되어야 한다 (보정이
+        없으면 SMPL 회전이 A-pose 위에 중첩 적용되어 팔이 과도하게 꺾인다)."""
+        worker.bake_animation(self.rigged, make_motion(), self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        node_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
+        world = worker._rig_rest_world(gltf, node_by_name)
+        for side, sign in (("Left", -1.0), ("Right", 1.0)):
+            arm, fore = world[side + "Arm"], world[side + "ForeArm"]
+            v = [fore[k] - arm[k] for k in range(3)]
+            n = sum(c * c for c in v) ** 0.5
+            v = [c / n for c in v]
+            self.assertLess(v[1], -0.5, "픽스처의 rest 팔은 대각선 아래여야 함")
+            acc = self.channel_output(gltf, gltf["animations"][0], side + "Arm", "rotation")
+            q = self.read_floats(gltf, bin_data, acc, 4)[0]
+            rotated = worker._quat_rotate_vec3(q, v)
+            self.assertAlmostEqual(rotated[1], 0.0, places=4, msg=f"{side} arm should become horizontal")
+            self.assertAlmostEqual(rotated[0], sign, places=4)
+
+    def test_arm_rest_delta_keeps_forearm_chain_consistent(self):
+        """ForeArm에는 q' = D_arm ⊗ q ⊗ D⁻¹ 보정 — 항등 프레임에서 부모와 합성 시
+        팔뚝 월드 방향도 수평이 되어야 한다."""
+        worker.bake_animation(self.rigged, make_motion(), self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        node_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
+        world = worker._rig_rest_world(gltf, node_by_name)
+        anim = gltf["animations"][0]
+        arm_q = self.read_floats(gltf, bin_data, self.channel_output(gltf, anim, "LeftArm", "rotation"), 4)[0]
+        fore_q = self.read_floats(gltf, bin_data, self.channel_output(gltf, anim, "LeftForeArm", "rotation"), 4)[0]
+        arm, fore = world["LeftArm"], world["LeftForeArm"]
+        v = [fore[k] - arm[k] for k in range(3)]
+        n = sum(c * c for c in v) ** 0.5
+        v = [c / n for c in v]  # 팔뚝 rest 방향(픽스처에선 상완과 같은 대각선)
+        combined = worker._quat_mul(tuple(arm_q), tuple(fore_q))
+        rotated = worker._quat_rotate_vec3(combined, v)
+        self.assertAlmostEqual(rotated[1], 0.0, places=4)
 
 
 if __name__ == "__main__":

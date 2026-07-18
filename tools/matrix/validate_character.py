@@ -84,8 +84,15 @@ def check_upright(gltf, bin_data):
     if not (core["y"] > 1.15 * core["x"] and core["y"] > 1.15 * core["z"]):
         issues.append(f"core-body Y range ({core['y']:.3f}, p10-p90) is not clearly the tallest axis "
                        f"vs X={core['x']:.3f} Z={core['z']:.3f} — character may be lying down")
+    # 평면 카드/부조(relief) 복원 실패 검출: 실측(20종)에서 정상 캐릭터의
+    # 최소 수평축/키 비율은 >= 0.125, 카드로 복원된 실패 사례는 0.007이었다
+    # — 0.06이면 2배 마진으로 안전하게 분리된다.
+    depth_ratio = min(core["x"], core["z"]) / core["y"] if core["y"] > 0 else 0.0
+    if depth_ratio < 0.06:
+        issues.append(f"core depth ratio {depth_ratio:.3f} (min horizontal axis / height) < 0.06 "
+                       f"— mesh is a flat card/relief, reconstruction likely failed")
     return {"ok": not issues, "issues": issues, "extents": ext, "core_extents": core,
-            "min_y": min(ys), "max_y": max(ys)}
+            "depth_ratio": depth_ratio, "min_y": min(ys), "max_y": max(ys)}
 
 
 def check_hierarchy(gltf):

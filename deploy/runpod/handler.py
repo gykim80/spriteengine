@@ -14,8 +14,13 @@ from pathlib import Path
 
 import runpod
 
+# rembg(u2net) 모델을 네트워크 볼륨에 캐시해 콜드 스타트마다 재다운로드하지
+# 않도록 한다 — rembg는 세션 생성 시점에 U2NET_HOME을 읽는다.
+os.environ.setdefault("U2NET_HOME", os.path.join(os.getenv("RUNPOD_VOLUME", "/runpod-volume"), "u2net"))
+
 _pipeline = None
 _paint = None
+_rembg = None
 
 
 def pipeline():
@@ -49,6 +54,34 @@ def paint_pipeline(max_num_view: int, resolution: int):
         config.custom_pipeline = str(paint_dir / "hunyuanpaintpbr")
         _paint = Hunyuan3DPaintPipeline(config)
     return _paint
+
+
+def remove_background(image_path: Path) -> tuple[bool, str]:
+    """공식 Hunyuan3D-2.1 demo.py와 동일하게 shape 생성 전 배경을 제거한다.
+
+    내부 전처리기(ImageProcessorV2)는 알파 채널이 없으면 이미지 전체를 불투명
+    마스크(255)로 취급해 스튜디오 배경까지 지오메트리로 복원한다 — 배경 판/
+    부조(카드) 아티팩트의 원인. 이미 유의미한 투명 배경이 있으면 그대로 둔다.
+    반환: (배경 제거 수행 여부, 오류 메시지 — 실패 시에만 비어있지 않음).
+    """
+    global _rembg
+    from PIL import Image
+    with Image.open(image_path) as img:
+        img = img.convert("RGBA") if img.mode != "RGBA" else img.copy()
+        alpha_min = img.getchannel("A").getextrema()[0]
+    if alpha_min < 128:
+        return False, ""  # 이미 투명 배경 — 이중 제거로 실루엣 훼손 방지
+    try:
+        if _rembg is None:
+            from hy3dshape.rembg import BackgroundRemover
+            _rembg = BackgroundRemover()
+        out = _rembg(img)
+        out.save(str(image_path))
+        return True, ""
+    except Exception as exc:  # noqa: BLE001 — onnx/모델 다운로드 등 실패 유형 다양
+        # 배경 제거는 품질에 필수지만, 실패 시에도 shape 생성은 시도한다
+        # (경고를 응답에 실어 호출자가 재시도/검증으로 걸러낼 수 있게).
+        return False, f"{type(exc).__name__}: {exc}"
 
 
 def decode_image(value: str, target: Path) -> None:
@@ -131,6 +164,9 @@ def handler(job):
         image = root / "input.png"
         output = root / "character.glb"
         decode_image(payload.get("image", ""), image)
+        # 공식 파이프라인 충실성: shape/texture 모두 배경 제거된 RGBA를 사용
+        # (같은 경로에 덮어쓰므로 hy3dpaint 텍스처 단계에도 그대로 반영된다).
+        background_removed, rembg_error = remove_background(image)
         meshes = pipeline()(
             image=str(image),
             seed=seed,
@@ -189,9 +225,12 @@ def handler(job):
             "faces": faces,
             "octree_resolution": octree,
             "textured": textured,
+            "background_removed": background_removed,
             "glb_base64": encoded,
             "bytes": len(data),
         }
+        if rembg_error:
+            response["rembg_error"] = rembg_error
         if texture_error:
             response["texture_error"] = texture_error
         return response
