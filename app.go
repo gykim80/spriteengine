@@ -112,6 +112,23 @@ func (a *App) load() {
 			a.jobs[i].Logs = append(a.jobs[i].Logs, LogEntry{time.Now().Format(time.RFC3339), "system", "error", "Stage interrupted by app shutdown"})
 			changed = true
 		}
+		// 과거 버전이 stage 성공 후 status를 processing으로 남긴 채 저장한 job:
+		// 실패한 stage가 없고 다음 ready stage가 있으면 실행 가능한 상태로 복구한다.
+		if a.jobs[i].Status == "failed" {
+			hasFailed := false
+			for _, s := range a.jobs[i].Stages {
+				if s.Status == "failed" {
+					hasFailed = true
+					break
+				}
+			}
+			if !hasFailed {
+				if _, ok := nextStage(a.jobs[i]); ok {
+					a.jobs[i].Status = "ready"
+					changed = true
+				}
+			}
+		}
 	}
 	if changed {
 		a.save()
@@ -285,6 +302,7 @@ func (a *App) RunNextStage(id string) (Job, error) {
 		a.jobs[idx].Stages[stageIndex].Detail = "Completed · RunPod Hunyuan3D-2.1"
 		if stageIndex+1 < len(a.jobs[idx].Stages) {
 			a.jobs[idx].Stages[stageIndex+1].Status = "ready"
+			a.jobs[idx].Status = "ready" // processing으로 남으면 delete/reset이 영원히 거부됨
 		} else {
 			a.jobs[idx].Status = "complete"
 		}
@@ -349,6 +367,7 @@ func (a *App) RunNextStage(id string) (Job, error) {
 	a.jobs[idx].Stages[stageIndex].Detail = "Completed · local-baseline"
 	if stageIndex+1 < len(a.jobs[idx].Stages) {
 		a.jobs[idx].Stages[stageIndex+1].Status = "ready"
+		a.jobs[idx].Status = "ready" // processing으로 남으면 delete/reset이 영원히 거부됨
 	} else {
 		a.jobs[idx].Status = "complete"
 	}

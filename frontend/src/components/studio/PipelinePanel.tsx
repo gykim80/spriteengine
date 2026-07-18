@@ -29,7 +29,15 @@ export default function PipelinePanel({job, running, workerMessage, artifactUrl,
   useEffect(() => setPendingReset(null), [job.id]);
 
   const complete = job.status === 'complete';
+  // failed stage가 있으면 reset → run을 한 번에 처리하는 Retry로 전환
+  const failedStage = job.stages.find(s => s.status === 'failed');
   const logs = [...(job.logs || [])].slice(-60).reverse();
+
+  async function retryFailed(runAll: boolean) {
+    if (!failedStage) return;
+    await onReset(failedStage.id);
+    await (runAll ? onRunAll() : onRunNext());
+  }
 
   return (
     <>
@@ -76,10 +84,14 @@ export default function PipelinePanel({job, running, workerMessage, artifactUrl,
               </div>
             ))}
           </div>
-          <button className="run" disabled={running || complete || !job.image} onClick={onRunNext}>
-            <Zap />{running ? 'Worker running…' : complete ? 'Pipeline complete' : job.image ? 'Run next stage' : 'Reference image required'}
+          <button className="run" disabled={running || complete || !job.image}
+            onClick={failedStage ? () => retryFailed(false) : onRunNext}>
+            <Zap />{running ? 'Worker running…' : complete ? 'Pipeline complete'
+              : !job.image ? 'Reference image required'
+              : failedStage ? `Retry ${failedStage.name}` : 'Run next stage'}
           </button>
-          <button className="import-motion" disabled={running || complete || !job.image} onClick={onRunAll}>
+          <button className="import-motion" disabled={running || complete || !job.image}
+            onClick={failedStage ? () => retryFailed(true) : onRunAll}>
             <Play />Run full pipeline
           </button>
           <p className="hint"><ShieldCheck /> Every stage is non-destructive · 완료 단계는 ↺ 로 재실행</p>

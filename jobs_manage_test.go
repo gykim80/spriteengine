@@ -244,3 +244,46 @@ func TestImportReferenceDataRejectsBadInput(t *testing.T) {
 		t.Fatalf("rejected imports must not leave jobs: %#v", a.ListJobs())
 	}
 }
+
+func TestRunNextStageLeavesJobManageable(t *testing.T) {
+	isolateConfig(t)
+	a := NewApp()
+	job := importFixtureJob(t, a)
+	updated, err := a.RunNextStage(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 중간 stage 성공 후 job은 processing에 남으면 안 된다 (delete/reset 영구 거부 버그).
+	if updated.Status != "ready" {
+		t.Fatalf("status after mid-pipeline stage = %q, want ready", updated.Status)
+	}
+	if _, err := a.ResetStage(job.ID, "prepare"); err != nil {
+		t.Fatalf("reset refused after stage success: %v", err)
+	}
+	if _, err := a.DeleteJob(job.ID); err != nil {
+		t.Fatalf("delete refused after stage success: %v", err)
+	}
+}
+
+func TestLoadRepairsStaleFailedJob(t *testing.T) {
+	isolateConfig(t)
+	a := NewApp()
+	job := importFixtureJob(t, a)
+	if _, err := a.RunNextStage(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	// 과거 버전처럼 stage는 정상(done/ready)인데 status만 failed로 저장된 상태를 재현
+	a.mu.Lock()
+	a.jobs[a.findJobLocked(job.ID)].Status = "failed"
+	a.save()
+	a.mu.Unlock()
+	b := NewApp()
+	b.load()
+	i := b.findJobLocked(job.ID)
+	if i < 0 {
+		t.Fatal("job missing after reload")
+	}
+	if b.jobs[i].Status != "ready" {
+		t.Fatalf("stale failed job not repaired: %q", b.jobs[i].Status)
+	}
+}
