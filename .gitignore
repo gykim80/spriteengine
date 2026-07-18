@@ -4,6 +4,9 @@ build/bin/
 .DS_Store
 *.log
 
+# Local QA artifacts (Playwright MCP snapshots/logs)
+.playwright-mcp/
+
 # RunPod credentials and generated deployment state
 runpod-deployment.json
 **/runpod.json
