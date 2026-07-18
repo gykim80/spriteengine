@@ -102,7 +102,7 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .notice span{float:right;color:var(--accent)}
 
 /* ── Workspace / Viewport ────────────────── */
-.workspace{display:grid;grid-template-columns:minmax(550px,1fr) 365px;height:535px;border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-lg);background:var(--surface)}
+.workspace{display:grid;grid-template-columns:minmax(550px,1fr) 365px;height:clamp(535px,calc(100vh - 235px),840px);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-lg);background:var(--surface)}
 .viewport{position:relative;overflow:hidden;background:radial-gradient(circle at 50% 45%,#ffffff 0,#eef1f6 55%,#e6eaf2 100%)}
 .viewport.drag-over{outline:2px dashed var(--accent);outline-offset:-6px}
 .viewtop{position:absolute;z-index:3;top:0;left:0;right:0;height:48px;padding:0 17px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(16,24,40,.06);background:rgba(255,255,255,.62);backdrop-filter:blur(8px)}
@@ -123,7 +123,10 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .scene-note span{color:var(--text-2);margin-top:3px}
 
 /* ── Inspector ───────────────────────────── */
-.inspector{background:var(--surface);border-left:1px solid var(--border);padding:20px}
+/* 우측 inspector는 스튜디오 툴처럼 고정: 헤더/진행률/액션은 항상 보이고 목록만 내부 스크롤 */
+.inspector{background:var(--surface);border-left:1px solid var(--border);padding:20px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.inspector>*{flex-shrink:0}
+.inspector>.steps,.inspector>.clip-list{flex:1 1 auto;min-height:0;overflow-y:auto}
 .ins-head{display:flex;justify-content:space-between}
 .ins-head h2{font-size:17px;margin:6px 0;font-weight:700}
 .ins-head button{background:none;border:0;color:var(--muted)}
