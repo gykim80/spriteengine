@@ -65,11 +65,13 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // notice는 8초 뒤 자동으로 사라진다 (클릭으로 즉시 닫기도 유지).
+  // notice는 8초 뒤 자동으로 사라진다 (클릭·Escape로 즉시 닫기도 유지).
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(''), 8000);
-    return () => clearTimeout(t);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNotice(''); };
+    window.addEventListener('keydown', onKey);
+    return () => { clearTimeout(t); window.removeEventListener('keydown', onKey); };
   }, [notice]);
 
   const updateJob = (j: Job) => setJobs(v => v.map(x => (x.id === j.id ? j : x)));

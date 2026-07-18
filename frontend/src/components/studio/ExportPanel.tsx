@@ -6,7 +6,6 @@ type Props = {
   running: boolean;
   onExport: () => Promise<void>;
   onPreview: (path: string) => Promise<void>;
-  setNotice: (s: string) => void;
 };
 
 const base = (p: string) => p.split(/[\\/]/).pop() || p;

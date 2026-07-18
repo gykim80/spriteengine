@@ -125,7 +125,7 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
             onLoadFile={loadModelFile} onPreviewFile={previewModelFile} setNotice={setNotice} />
         )}
         {tab === 'export' && (
-          <ExportPanel job={job} running={running} onExport={onExport} onPreview={previewArtifact} setNotice={setNotice} />
+          <ExportPanel job={job} running={running} onExport={onExport} onPreview={previewArtifact} />
         )}
       </div>
     </section>
