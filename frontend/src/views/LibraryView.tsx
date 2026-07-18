@@ -21,6 +21,7 @@ export default function LibraryView({setNotice}: Props) {
   const [playing, setPlaying] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [playback, setPlayback] = useState<PlaybackState>({duration: 0, time: 0, clips: [], active: '', loaded: false});
+  const [dragOver, setDragOver] = useState(false);
   const blobRef = useRef('');
 
   // 언마운트 시 blob URL 정리
@@ -28,22 +29,35 @@ export default function LibraryView({setNotice}: Props) {
     if (blobRef.current) URL.revokeObjectURL(blobRef.current);
   }, []);
 
+  function previewFile(f: File) {
+    if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+    blobRef.current = URL.createObjectURL(f);
+    setModel(blobRef.current);
+    setModelName(f.name);
+    setClip('');
+    setPlaying(true);
+    setNotice(`${f.name} 로컬 로드 완료. 포함된 clip이 아래에 표시됩니다.`);
+  }
   function loadGLB() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.glb,.gltf';
     input.onchange = () => {
       const f = input.files?.[0];
-      if (!f) return;
-      if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-      blobRef.current = URL.createObjectURL(f);
-      setModel(blobRef.current);
-      setModelName(f.name);
-      setClip('');
-      setPlaying(true);
-      setNotice(`${f.name} 로컬 로드 완료. 포함된 clip이 아래에 표시됩니다.`);
+      if (f) previewFile(f);
     };
     input.click();
+  }
+  // Projects의 이미지 드롭과 동일한 UX: GLB/glTF를 viewport에 드롭하면 즉시 미리보기
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const f = Array.from(e.dataTransfer.files).find(x => /\.(glb|gltf)$/i.test(x.name));
+    if (!f) {
+      setNotice('GLB 또는 glTF 파일만 드롭할 수 있습니다.');
+      return;
+    }
+    previewFile(f);
   }
   function openURL(url: string) {
     api.openExternal(url).catch(() => window.open(url, '_blank'));
@@ -52,7 +66,10 @@ export default function LibraryView({setNotice}: Props) {
   return (
     <section className="content">
       <div className="workspace library-workspace">
-        <div className="viewport">
+        <div className={`viewport ${dragOver ? 'drag-over' : ''}`}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
+          onDrop={handleDrop}>
           <div className="viewtop">
             <span>LIBRARY PREVIEW · DRAG TO ORBIT · SCROLL TO ZOOM</span>
             <div>
@@ -74,13 +91,20 @@ export default function LibraryView({setNotice}: Props) {
             <div><span>LOCAL ASSET</span><h2>Clip browser</h2></div>
           </div>
           <div className="clip-list">
-            {(playback.clips.length ? playback.clips : ['Idle', 'Walk', 'Run']).map(name => (
+            {playback.clips.map(name => (
               <button key={name} className={playback.active === name ? 'selected' : ''} onClick={() => { setClip(name); setPlaying(true); }}>
                 <span className="clip-icon"><Film /></span>
                 <span><b>{name}</b><small>Embedded skeletal clip</small></span>
                 <em>{playback.active === name ? 'LIVE' : 'PLAY'}</em>
               </button>
             ))}
+            {!playback.clips.length && (
+              <div className="clip-empty">
+                {playback.loaded
+                  ? '이 파일에는 embedded animation clip이 없습니다.'
+                  : playback.error || '모델 로딩 중…'}
+              </div>
+            )}
           </div>
           <div className="motion-settings">
             <label><input type="checkbox" checked={playing} onChange={e => setPlaying(e.target.checked)} /> Playing</label>
