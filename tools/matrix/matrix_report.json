@@ -1,0 +1,192 @@
+{
+  "astronaut": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/astronaut/motion/character-animated.glb"
+  },
+  "chef": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/chef/motion/character-animated.glb"
+  },
+  "cyberpunk": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/cyberpunk/motion/character-animated.glb"
+  },
+  "firefighter": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/firefighter/motion/character-animated.glb"
+  },
+  "knight": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/knight/motion/character-animated.glb"
+  },
+  "ninja": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/ninja/motion/character-animated.glb"
+  },
+  "pirate": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/pirate/motion/character-animated.glb"
+  },
+  "robot": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/robot/motion/character-animated.glb"
+  },
+  "viking": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/viking/motion/character-animated.glb"
+  },
+  "wizard": {
+    "animations": 10,
+    "channels": [
+      15
+    ],
+    "names": [
+      "run",
+      "jump",
+      "wave",
+      "dance",
+      "punch",
+      "kick",
+      "walk",
+      "bow",
+      "spin",
+      "flykick"
+    ],
+    "path": "/tmp/spriteengine_matrix/ws/wizard/motion/character-animated.glb"
+  }
+}
