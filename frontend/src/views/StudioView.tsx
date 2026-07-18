@@ -50,17 +50,20 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
   }, [job?.id]);
   useEffect(() => () => { if (blobRef.current) URL.revokeObjectURL(blobRef.current); }, []);
 
+  // 로컬 GLB/glTF를 blob URL로 Motion 뷰포트에 로드 (파일 선택·drag & drop 공용)
+  function previewModelFile(f: File) {
+    if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+    blobRef.current = URL.createObjectURL(f);
+    setCustomModel(blobRef.current);
+    setNotice(`${f.name} loaded locally. Embedded clips will appear in Motion.`);
+  }
   function loadModelFile() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.glb,.gltf';
     input.onchange = () => {
       const f = input.files?.[0];
-      if (!f) return;
-      if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-      blobRef.current = URL.createObjectURL(f);
-      setCustomModel(blobRef.current);
-      setNotice(`${f.name} loaded locally. Embedded clips will appear in Motion.`);
+      if (f) previewModelFile(f);
     };
     input.click();
   }
@@ -105,7 +108,8 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
           onRunNext={onRunNext} onRunAll={onRunAll} onReset={onReset} />
       )}
       {tab === 'motion' && (
-        <MotionPanel modelUrl={motionModel || '/models/Soldier.glb'} usingFallback={!motionModel} onLoadFile={loadModelFile} />
+        <MotionPanel modelUrl={motionModel || '/models/Soldier.glb'} usingFallback={!motionModel}
+          onLoadFile={loadModelFile} onPreviewFile={previewModelFile} setNotice={setNotice} />
       )}
       {tab === 'export' && (
         <ExportPanel job={job} running={running} onExport={onExport} onPreview={previewArtifact} setNotice={setNotice} />

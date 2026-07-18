@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 import {Box, Film, Pause, Play, RotateCcw, Upload} from 'lucide-react';
 import CharacterViewport, {type PlaybackState} from '../../LazyViewport';
 
@@ -6,25 +6,44 @@ type Props = {
   modelUrl: string;
   usingFallback: boolean;
   onLoadFile: () => void;
+  onPreviewFile: (f: File) => void;
+  setNotice: (s: string) => void;
 };
 
 // 스켈레탈 clip 재생 · 타임라인 스크럽 · 속도/스켈레톤 제어.
-export default function MotionPanel({modelUrl, usingFallback, onLoadFile}: Props) {
+export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPreviewFile, setNotice}: Props) {
   const [playing, setPlaying] = useState(true);
-  const [clip, setClip] = useState('Idle');
+  const [clip, setClip] = useState('');
   const [speed, setSpeed] = useState(1);
   const [scrub, setScrub] = useState(0);
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [playback, setPlayback] = useState<PlaybackState>({duration: 0, time: 0, clips: [], active: '', loaded: false});
+  const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => { if (playing) setScrub(playback.time); }, [playback.time, playing]);
   const onPlayback = useCallback((s: PlaybackState) => setPlayback(s), []);
-  const available = useMemo(() => (playback.clips.length ? playback.clips : ['Idle', 'Walk', 'Run']), [playback.clips]);
+
+  // Library·Projects와 동일한 UX: GLB/glTF를 viewport에 드롭하면 즉시 미리보기
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const f = Array.from(e.dataTransfer.files).find(x => /\.(glb|gltf)$/i.test(x.name));
+    if (!f) {
+      setNotice('GLB 또는 glTF 파일만 드롭할 수 있습니다.');
+      return;
+    }
+    setClip('');
+    setPlaying(true);
+    onPreviewFile(f);
+  }
 
   return (
     <>
       <div className="workspace motion-workspace">
-        <div className="viewport">
+        <div className={`viewport ${dragOver ? 'drag-over' : ''}`}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
+          onDrop={handleDrop}>
           <div className="viewtop">
             <span>SKINNED MESH · DRAG TO ORBIT · SCROLL TO ZOOM</span>
             <div>
@@ -48,13 +67,20 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile}: Props
             <b className="fps">60 FPS</b>
           </div>
           <div className="clip-list">
-            {available.map((name, i) => (
+            {playback.clips.map(name => (
               <button key={name} className={clip === name || playback.active === name ? 'selected' : ''} onClick={() => { setClip(name); setPlaying(true); }}>
                 <span className="clip-icon"><Film /></span>
-                <span><b>{name}</b><small>{i === 0 ? 'Loop · locomotion' : 'Embedded skeletal clip'}</small></span>
+                <span><b>{name}</b><small>Embedded skeletal clip</small></span>
                 <em>{playback.active === name ? 'LIVE' : 'PLAY'}</em>
               </button>
             ))}
+            {!playback.clips.length && (
+              <div className="clip-empty">
+                {playback.loaded
+                  ? '이 GLB에는 embedded animation clip이 없습니다. Import GLB로 애니메이션 포함 파일을 로드하세요.'
+                  : playback.error || '모델 로딩 중…'}
+              </div>
+            )}
           </div>
           <div className="motion-settings">
             <label>Playback speed <b>{speed.toFixed(2)}×</b></label>
