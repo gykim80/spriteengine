@@ -41,7 +41,7 @@ CHARACTERS_SET2 = {
     "boxer":      "a muscular boxer wearing red gloves, blue shorts and boxing shoes",
     "ballerina":  "a ballerina in a light pink tutu and pointe shoes with hair in a bun",
     "zombie":     "a cartoonish zombie office worker with torn shirt and green skin",
-    "superhero":  "a superhero in a blue suit with a yellow cape and emblem on the chest",
+    "superhero":  "a masked vigilante hero in a matte green and black tactical suit with a utility belt, no cape, no logo",
     "detective":  "a detective in a beige trench coat and fedora hat holding nothing",
     "scientist":  "a scientist in a white lab coat with safety goggles on the forehead",
     "farmer":     "a friendly farmer in denim overalls, plaid shirt and straw hat",
