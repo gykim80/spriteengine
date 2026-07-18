@@ -1,18 +1,20 @@
 import {useCallback, useEffect, useState} from 'react';
-import {Box, Film, Pause, Play, RotateCcw, Upload, Wand2} from 'lucide-react';
+import {Box, Download, Film, Pause, Play, RotateCcw, Upload, Wand2} from 'lucide-react';
 import CharacterViewport, {type PlaybackState} from '../../LazyViewport';
 import {parseMotionPrompt, type MotionSpec} from '../../motion/motionScript';
+import {api, errText, isCancelled} from '../../api';
 
 type Props = {
   modelUrl: string;
   usingFallback: boolean;
+  jobName: string;
   onLoadFile: () => void;
   onPreviewFile: (f: File) => void;
   setNotice: (s: string) => void;
 };
 
 // 스켈레탈 clip 재생 · 타임라인 스크럽 · 속도/스켈레톤 제어.
-export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPreviewFile, setNotice}: Props) {
+export default function MotionPanel({modelUrl, usingFallback, jobName, onLoadFile, onPreviewFile, setNotice}: Props) {
   const [playing, setPlaying] = useState(true);
   const [clip, setClip] = useState('');
   const [speed, setSpeed] = useState(1);
@@ -23,6 +25,7 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
   // 텍스트 연출: 프롬프트 → 파싱된 spec → viewport에서 AnimationClip으로 컴파일
   const [prompt, setPrompt] = useState('');
   const [motion, setMotion] = useState<MotionSpec | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => { if (playing) setScrub(playback.time); }, [playback.time, playing]);
   // 모델이 바뀌면 이전 모델의 clip 선택/scrub/연출을 초기화
@@ -81,6 +84,23 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
     setNotice('연출을 해제했습니다.');
   }
 
+  // 연출 clip을 모델에 bake한 GLB를 저장한다 (embedded clip 유지).
+  // three가 필요한 bake 모듈은 dynamic import로 로드해 메인 번들을 지킨다.
+  async function exportAnimated() {
+    if (!motion || exporting) return;
+    setExporting(true);
+    try {
+      const {bakeAnimatedGLBBase64} = await import('../../motion/exportAnimated');
+      const b64 = await bakeAnimatedGLBBase64(modelUrl, motion);
+      const dst = await api.saveAnimatedGLB(jobName, b64);
+      setNotice(`애니메이션 포함 GLB 저장 완료: ${dst}`);
+    } catch (e) {
+      if (!isCancelled(e)) setNotice(errText(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <>
       <div className="workspace motion-workspace">
@@ -119,10 +139,16 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
               <button onClick={directMotion} disabled={!prompt.trim()} title="프롬프트에서 동작을 추출해 연출 clip을 생성합니다"><Wand2 />연출</button>
             </div>
             {motion && (
-              <div className="director-chips" aria-label="연출된 동작 시퀀스">
-                {motion.actions.map((a, i) => <span key={a.id} className="chip">{i > 0 ? '→ ' : ''}{a.label}</span>)}
-                <button className="chip-clear" onClick={clearMotion}>해제</button>
-              </div>
+              <>
+                <div className="director-chips" aria-label="연출된 동작 시퀀스">
+                  {motion.actions.map((a, i) => <span key={a.id} className="chip">{i > 0 ? '→ ' : ''}{a.label}</span>)}
+                  <button className="chip-clear" onClick={clearMotion}>해제</button>
+                </div>
+                <button className="director-export" onClick={exportAnimated} disabled={exporting}
+                  title="연출 애니메이션을 모델에 bake한 GLB를 저장합니다">
+                  <Download />{exporting ? 'Baking animation…' : '애니메이션 포함 GLB 저장'}
+                </button>
+              </>
             )}
           </div>
           <div className="clip-list">

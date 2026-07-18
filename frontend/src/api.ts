@@ -19,6 +19,7 @@ export const api = {
   renameJob: (id: string, name: string) => call<Job>(a => a.RenameJob(id, name)),
   resetStage: (id: string, stageId: string) => call<Job>(a => a.ResetStage(id, stageId)),
   exportFinalGLB: (id: string) => call<string>(a => a.ExportFinalGLB(id)),
+  saveAnimatedGLB: (name: string, base64: string) => call<string>(a => a.SaveAnimatedGLB(name, base64)),
   readJobImage: (id: string) => call<string>(a => a.ReadJobImage(id)),
   readArtifact: (path: string) => call<string>(a => a.ReadArtifact(path)),
   openWorkspace: (id: string) => call<void>(a => a.OpenWorkspace(id)),

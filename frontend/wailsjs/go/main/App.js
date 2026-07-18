@@ -74,6 +74,10 @@ export function SaveAndTestRunPodConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAndTestRunPodConfig'](arg1, arg2, arg3);
 }
 
+export function SaveAnimatedGLB(arg1, arg2) {
+  return window['go']['main']['App']['SaveAnimatedGLB'](arg1, arg2);
+}
+
 export function SaveRunPodConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveRunPodConfig'](arg1, arg2, arg3);
 }

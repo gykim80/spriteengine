@@ -287,3 +287,23 @@ func TestLoadRepairsStaleFailedJob(t *testing.T) {
 		t.Fatalf("stale failed job not repaired: %q", b.jobs[i].Status)
 	}
 }
+
+func TestDecodeAnimatedGLB(t *testing.T) {
+	glb := append([]byte("glTF"), make([]byte, 20)...)
+	data, err := decodeAnimatedGLB(base64.StdEncoding.EncodeToString(glb))
+	if err != nil {
+		t.Fatalf("valid GLB rejected: %v", err)
+	}
+	if string(data[:4]) != "glTF" {
+		t.Fatal("payload corrupted during decode")
+	}
+	if _, err := decodeAnimatedGLB("%%%not-base64%%%"); err == nil {
+		t.Fatal("invalid base64 accepted")
+	}
+	if _, err := decodeAnimatedGLB(base64.StdEncoding.EncodeToString([]byte("PK\x03\x04 not a glb"))); err == nil {
+		t.Fatal("non-GLB payload accepted")
+	}
+	if _, err := decodeAnimatedGLB(base64.StdEncoding.EncodeToString([]byte("glTF"))); err == nil {
+		t.Fatal("truncated GLB accepted")
+	}
+}

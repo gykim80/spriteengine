@@ -38,6 +38,8 @@ export function RunNextStage(arg1:string):Promise<main.Job>;
 
 export function SaveAndTestRunPodConfig(arg1:string,arg2:string,arg3:string):Promise<main.RunPodStatus>;
 
+export function SaveAnimatedGLB(arg1:string,arg2:string):Promise<string>;
+
 export function SaveRunPodConfig(arg1:string,arg2:string,arg3:string):Promise<main.RunPodConfig>;
 
 export function SystemInfo():Promise<main.SystemInfo>;

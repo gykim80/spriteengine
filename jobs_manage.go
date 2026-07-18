@@ -252,6 +252,57 @@ func (a *App) ExportFinalGLB(id string) (string, error) {
 	return a.exportGLBToPath(id, dst)
 }
 
+// decodeAnimatedGLB validates the browser-baked GLB payload. Split from
+// SaveAnimatedGLB so tests can run it without a native save dialog.
+func decodeAnimatedGLB(dataB64 string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return nil, errors.New("invalid GLB payload")
+	}
+	if len(data) < 12 || string(data[:4]) != "glTF" {
+		return nil, errors.New("payload is not a GLB")
+	}
+	if len(data) > 256*1024*1024 {
+		return nil, errors.New("GLB exceeds 256MB limit")
+	}
+	return data, nil
+}
+
+// SaveAnimatedGLB stores a GLB baked in the frontend (viewport 모델 + 텍스트 연출
+// AnimationClip)를 사용자가 고른 위치에 저장한다.
+func (a *App) SaveAnimatedGLB(name string, dataB64 string) (string, error) {
+	if a.ctx == nil {
+		return "", errors.New("application is not ready")
+	}
+	data, err := decodeAnimatedGLB(dataB64)
+	if err != nil {
+		return "", err
+	}
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = "character"
+	}
+	// 파일명에 쓸 수 없는 문자를 정리
+	base = strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return '-'
+		}
+		return r
+	}, base)
+	dst, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{Title: "Export animated GLB", DefaultFilename: base + "-animated.glb", Filters: []wailsruntime.FileFilter{{DisplayName: "glTF Binary (*.glb)", Pattern: "*.glb"}}})
+	if err != nil {
+		return "", err
+	}
+	if dst == "" {
+		return "", errors.New("cancelled")
+	}
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
 // ReadJobImage serves the imported reference image as a data URI for card
 // thumbnails. Only the registered job image path is readable.
 func (a *App) ReadJobImage(id string) (string, error) {
