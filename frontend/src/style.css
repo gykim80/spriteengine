@@ -202,6 +202,13 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .inline-rename button{width:26px;height:26px;flex:none;display:grid;place-items:center;border:1px solid var(--border-strong);background:var(--surface);border-radius:7px;color:var(--text-2)}
 .inline-rename button:hover{border-color:var(--accent-border);color:var(--accent)}
 .inline-rename svg{width:13px}
+/* Studio 헤더 제목 옆 rename 컨트롤 */
+.head-title{display:flex;align-items:center;gap:9px}
+.head-rename-btn{width:26px;height:26px;display:grid;place-items:center;border:1px solid transparent;background:none;border-radius:7px;color:var(--muted);transition:color .15s,border-color .15s}
+.head-rename-btn:hover{color:var(--accent);border-color:var(--accent-border)}
+.head-rename-btn svg{width:13px}
+.head-rename{margin-top:8px;max-width:420px}
+.head-rename input{height:32px;font-size:15px;font-weight:700}
 .project-new{border:1.5px dashed var(--border-strong);background:var(--surface-2);border-radius:13px;min-height:214px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--text-2);transition:border-color .15s,background .15s}
 .project-new:hover{border-color:var(--accent-border);background:var(--accent-soft)}
 .project-new.drag-over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}

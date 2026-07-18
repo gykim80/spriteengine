@@ -24,8 +24,13 @@ function App() {
   const [running, setRunning] = useState(false);
   const [workerMessage, setWorkerMessage] = useState('');
   const [runpod, setRunpod] = useState<RunPodConfig>({endpointId: '', baseUrl: 'https://api.runpod.ai/v2', configured: false, keySource: 'none'});
+  const [renamingHead, setRenamingHead] = useState(false);
+  const [headDraft, setHeadDraft] = useState('');
 
   const job = jobs.find(j => j.id === selectedId) || null;
+
+  // view나 프로젝트가 바뀌면 헤더 rename 편집 상태를 닫는다.
+  useEffect(() => { setRenamingHead(false); }, [view, selectedId]);
 
   useEffect(() => {
     api.listJobs().then(x => setJobs(x || [])).catch(() => {});
@@ -142,6 +147,18 @@ function App() {
       setNotice(errText(e));
     }
   }
+  // Studio 헤더 제목에서 바로 이름 변경 (Projects 카드 메뉴와 동일 동작)
+  function beginHeadRename() {
+    if (!job) return;
+    setHeadDraft(job.name);
+    setRenamingHead(true);
+  }
+  async function commitHeadRename() {
+    const name = headDraft.trim();
+    setRenamingHead(false);
+    if (!job || !name || name === job.name) return;
+    await renameJob(job.id, name);
+  }
   async function exportGLB() {
     if (!job) return;
     try {
@@ -169,7 +186,23 @@ function App() {
         <header>
           <div>
             <span className="eyebrow">{eyebrow}</span>
-            <h1>{view === 'studio' && job ? job.name : title}</h1>
+            {view === 'studio' && job ? (
+              renamingHead ? (
+                <div className="inline-rename head-rename">
+                  <input autoFocus value={headDraft} onChange={e => setHeadDraft(e.target.value)} aria-label="Project name"
+                    onKeyDown={e => { if (e.key === 'Enter') commitHeadRename(); if (e.key === 'Escape') setRenamingHead(false); }} />
+                  <button aria-label="Confirm rename" onClick={commitHeadRename}><Check /></button>
+                  <button aria-label="Cancel rename" onClick={() => setRenamingHead(false)}><X /></button>
+                </div>
+              ) : (
+                <h1 className="head-title">
+                  {job.name}
+                  <button className="head-rename-btn" aria-label="Rename project" title="Rename project" onClick={beginHeadRename}><Pencil /></button>
+                </h1>
+              )
+            ) : (
+              <h1>{title}</h1>
+            )}
           </div>
           <div className="header-actions">
             {view === 'studio' && job && (
