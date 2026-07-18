@@ -1,33 +1,179 @@
-import {useCallback,useEffect,useMemo,useState} from 'react';
-import {Box,ChevronRight,Download,FileImage,Film,FolderOpen,GitBranch,ImagePlus,Layers3,Library,Pause,Play,Plus,RotateCcw,Settings,ShieldCheck,Sparkles,Upload,Zap} from 'lucide-react';
+import {useEffect, useState} from 'react';
+import {Download, FolderOpen, Plus} from 'lucide-react';
 import {EventsOn} from '../wailsjs/runtime/runtime';
-import CharacterViewport,{PlaybackState} from './CharacterViewport';
+import {api, errText, isCancelled} from './api';
+import type {Job, RunPodConfig, View} from './types';
+import Sidebar from './components/Sidebar';
+import ProjectsView from './views/ProjectsView';
+import StudioView from './views/StudioView';
+import LibraryView from './views/LibraryView';
+import SettingsView from './views/SettingsView';
 
-type Stage={id:string,name:string,status:string,detail:string};type Artifact={stage:string,kind:string,path:string,metrics?:Record<string,unknown>};type Log={time:string,stage:string,level:string,message:string};type Job={id:string,name:string,created:string,status:string,progress:number,image?:string,imageHash?:string,workspace?:string,stages:Stage[],artifacts?:Artifact[],logs?:Log[]};
-const api=()=> (window as any).go?.main?.App;
-const stages:Stage[]=[{id:'prepare',name:'Image cleanup',status:'ready',detail:'Background removal & subject validation'},{id:'reconstruct',name:'3D reconstruction',status:'queued',detail:'TripoSR / InstantMesh adapter'},{id:'retopo',name:'Mesh cleanup',status:'queued',detail:'Retopology, UV & materials'},{id:'rig',name:'Auto rig',status:'queued',detail:'Skeleton & skin weights'},{id:'motion',name:'Animation',status:'queued',detail:'Motion retargeting'},{id:'export',name:'Export',status:'queued',detail:'GLB / FBX / USDZ'}];
-const initial:Job={id:'demo',name:'Bundled animated human',created:new Date().toISOString(),status:'demo',progress:0,stages};
-const libraries=[{name:'Itch.io 3D Characters',detail:'Creator-licensed character packs',url:'https://itch.io/game-assets/tag-3d/tag-characters'},{name:'Itch.io Animations',detail:'Rigged motion asset packs',url:'https://itch.io/game-assets/tag-3d/tag-animation'},{name:'Quaternius',detail:'CC0 animated character packs',url:'https://quaternius.com/'},{name:'Mixamo',detail:'Auto-rig and motion library',url:'https://www.mixamo.com/'},{name:'ActorCore Free',detail:'Mocap motion collection',url:'https://www.reallusion.com/actorcore/free-motion.html'}];
-function App(){const[jobs,setJobs]=useState<Job[]>([initial]);const[selected,setSelected]=useState('demo');const[tab,setTab]=useState('Motion Lab');const[playing,setPlaying]=useState(true);const[clip,setClip]=useState('Walk');const[speed,setSpeed]=useState(1);const[scrub,setScrub]=useState(0);const[showSkeleton,setShowSkeleton]=useState(false);const[playback,setPlayback]=useState<PlaybackState>({duration:0,time:0,clips:[],active:'',loaded:false});const[customModel,setCustomModel]=useState('');const[artifactModel,setArtifactModel]=useState('');const[notice,setNotice]=useState('Bundled skinned human and authored motion are playing.');const[running,setRunning]=useState(false);const[workerMessage,setWorkerMessage]=useState('');const[runpod,setRunpod]=useState({endpointId:'',baseUrl:'https://api.runpod.ai/v2',configured:false,keySource:'none'});const[runpodKey,setRunpodKey]=useState('');const job=jobs.find(j=>j.id===selected)||jobs[0];
-useEffect(()=>{api()?.ListJobs().then((x:Job[])=>{if(x?.length)setJobs(v=>[...x,...v.filter(j=>j.id==='demo')])}).catch(()=>{});api()?.GetRunPodConfig().then((x:any)=>x&&setRunpod(x)).catch(()=>{});let off=()=>{};try{off=EventsOn('worker:event',(event:any)=>{if(event?.message)setWorkerMessage(event.message)})}catch{}return()=>off()},[]);
-useEffect(()=>{if(playing)setScrub(playback.time)},[playback.time,playing]);
-const onPlayback=useCallback((s:PlaybackState)=>setPlayback(s),[]);
-const available=useMemo(()=>playback.clips.length?playback.clips:['Idle','Walk','Run'],[playback.clips]);
-async function importImage(){try{const j=await api()?.ImportReference();if(j){setJobs(v=>[j,...v.filter(x=>x.id!==j.id)]);setSelected(j.id);setTab('Create');setNotice('Reference copied with SHA-256 provenance.')}}catch(e){if(!String(e).includes('cancelled'))setNotice(String(e))}}
-async function previewArtifact(j:Job){const glb=[...(j.artifacts||[])].reverse().find(a=>a.path.toLowerCase().endsWith('.glb'));if(!glb)return;try{const url=await api()?.ReadArtifact(glb.path);if(url){setArtifactModel(url);setCustomModel('');setTab('Motion Lab');setClip('Idle');setPlaying(true);setNotice(`${glb.kind} artifact loaded in Motion Lab.`)}}catch(e){setNotice(String(e))}}
-    async function advance(){if(job.id==='demo'){setNotice('Image pipeline에는 reference import가 필요합니다. Motion Lab demo는 즉시 사용할 수 있습니다.');return}setRunning(true);setWorkerMessage('Starting isolated worker…');try{const j=await api()?.RunNextStage(job.id);if(j){setJobs(v=>v.map(x=>x.id===j.id?j:x));if(j.artifacts?.some((a:Artifact)=>a.path.toLowerCase().endsWith('.glb')))await previewArtifact(j)}setNotice('Stage completed and artifact provenance was recorded.')}catch(e){setNotice(String(e))}finally{setRunning(false);setWorkerMessage('')}}
-    async function runAll(){if(job.id==='demo')return;setRunning(true);setWorkerMessage('Running complete local pipeline…');try{const j=await api()?.RunAllStages(job.id);if(j){setJobs(v=>v.map(x=>x.id===j.id?j:x));await previewArtifact(j)}setNotice('Complete animation-ready GLB pipeline finished.')}catch(e){setNotice(String(e))}finally{setRunning(false);setWorkerMessage('')}}
-async function openWorkspace(){if(job.id==='demo'){setNotice('Create a project first.');return}try{await api()?.OpenWorkspace(job.id)}catch(e){setNotice(String(e))}}
-async function saveRunPod(){setRunning(true);try{const status=await api()?.SaveAndTestRunPodConfig(runpod.endpointId,runpodKey,runpod.baseUrl);if(status?.ok){const x=await api()?.GetRunPodConfig();if(x)setRunpod(x);setRunpodKey('')}setNotice(status?.message||'RunPod connection verified.')}catch(e){setNotice(String(e).replace(/^Error:\s*/,''))}finally{setRunning(false)}}
-async function clearRunPod(){setRunning(true);try{const x=await api()?.ClearRunPodConfig();if(x)setRunpod(x);setRunpodKey('');setNotice('저장된 RunPod credential을 삭제했습니다.')}catch(e){setNotice(String(e))}finally{setRunning(false)}}
-async function testRunPod(){setRunning(true);try{const status=await api()?.TestRunPod();setNotice(status?.message||'RunPod connection verified.')}catch(e){setNotice(String(e).replace(/^Error:\s*/,''))}finally{setRunning(false)}}
-function loadModelFile(){const input=document.createElement('input');input.type='file';input.accept='.glb,.gltf';input.onchange=()=>{const f=input.files?.[0];if(f){if(customModel.startsWith('blob:'))URL.revokeObjectURL(customModel);setCustomModel(URL.createObjectURL(f));setNotice(`${f.name} loaded locally. Embedded clips will appear in Motion Lab.`)}};input.click()}
-function openURL(url:string){api()?.OpenExternal(url).catch(()=>window.open(url,'_blank'))}
-const motionMode=tab==='Motion Lab';
-return <div className="shell"><aside><div className="brand"><div className="mark"><Sparkles/></div><div><b>SPRITEENGINE</b><span>AI CHARACTER STUDIO</span></div></div><nav><span className="nav-label">MENU</span>{[['Create',ImagePlus],['Projects',Library],['Motion Lab',Film],['Export',Download]].map(([n,I]:any)=><button key={n} className={tab===n?'active':''} onClick={()=>setTab(n)}><I/>{n}</button>)}</nav><div className="aside-bottom"><button className={tab==='Settings'?'active':''} onClick={()=>setTab('Settings')}><Settings/>Settings</button><div className="compute"><span><i/> {runpod.configured?'RunPod configured':'Local compute'}</span><small>GLTF runtime · {running?'Busy':'Ready'}</small></div></div></aside>
-<main><header><div><span className="eyebrow">WORKSPACE / {tab.toUpperCase()}</span><h1>{tab==='Settings'?'RunPod GPU connection':motionMode?'Motion Lab — preview real skeletal clips.':'Turn one image into a living character.'}</h1></div><div className="header-actions"><button onClick={()=>openURL('https://github.com/topics/human-motion-generation')}><GitBranch/>Open-source library</button><button onClick={loadModelFile}><Upload/>Load GLB</button><button className="primary" onClick={importImage}><Plus/>Import character</button></div></header>
-{tab==='Settings'?<section className="content"><div className="settings-card"><span className="eyebrow">REMOTE COMPUTE</span><h2>RunPod Serverless</h2><p>API key는 Go backend에만 저장되며 frontend state나 project manifest에 기록되지 않습니다.</p><label>Endpoint ID<input value={runpod.endpointId} onChange={e=>setRunpod({...runpod,endpointId:e.target.value})} placeholder="예: abcdef123456"/></label><label>API key<input type="password" autoComplete="new-password" spellCheck={false} value={runpodKey} onChange={e=>setRunpodKey(e.target.value)} placeholder={runpod.configured?`Configured via ${runpod.keySource} · 변경할 때만 입력`:'RunPod Settings에서 생성한 API key 원문'}/><small>Endpoint ID, 가려진 **** 값, GitHub/Hugging Face token은 사용할 수 없습니다.</small></label><label>API base URL<input value={runpod.baseUrl} onChange={e=>setRunpod({...runpod,baseUrl:e.target.value})}/></label><div className="settings-actions"><button disabled={running||!runpod.configured} onClick={testRunPod}>Test connection</button><button disabled={running||!runpod.configured} onClick={clearRunPod}>Clear saved key</button><button className="primary" disabled={running||!runpod.endpointId||(!runpodKey&&!runpod.configured)} onClick={saveRunPod}>{running?'Authenticating…':'Verify & save'}</button></div>{notice&&<div className="settings-notice">{notice}</div>}</div></section>:<section className="content">{notice&&<button className="notice" onClick={()=>setNotice('')}>{notice}<span>×</span></button>}<div className="toolbar"><div className="tabs">{(motionMode?['Clips','Timeline','Libraries']:['Pipeline','Assets','Versions']).map((x,i)=><button key={x} className={i===0?'on':''}>{x}</button>)}</div><div className={`status ${playback.loaded?'':'pending'}`}><i/> {playback.loaded?'Skinned GLB loaded':'Loading model'} <span>{playback.active||'runtime'}</span></div></div>
-<div className={`workspace ${motionMode?'motion-workspace':''}`}><div className="viewport"><div className="viewtop"><span>SKINNED MESH · DRAG TO ORBIT · SCROLL TO ZOOM</span><div><button onClick={()=>setShowSkeleton(x=>!x)}>{showSkeleton?'Hide':'Show'} skeleton</button><button>Lit PBR</button></div></div><CharacterViewport playing={playing} clip={clip} speed={speed} time={scrub} showSkeleton={showSkeleton} modelUrl={customModel||artifactModel||'/models/Soldier.glb'} onState={onPlayback}/><div className="axis"><b>Y</b><span>X</span><em>Z</em></div><div className="scene-note"><Box/><div><b>{playback.loaded?'Real skinned character':'Loading asset…'}</b><span>{playback.clips.length} embedded animation clips · crossfade</span></div></div></div>
-{motionMode?<div className="inspector motion-panel"><div className="ins-head"><div><span>MOTION CLIPS</span><h2>Animation browser</h2></div><b className="fps">60 FPS</b></div><div className="clip-list">{available.map((name,i)=><button key={name} className={clip===name||playback.active===name?'selected':''} onClick={()=>{setClip(name);setPlaying(true)}}><span className="clip-icon"><Film/></span><span><b>{name}</b><small>{i===0?'Loop · locomotion':'Embedded skeletal clip'}</small></span><em>{playback.active===name?'LIVE':'PLAY'}</em></button>)}</div><div className="motion-settings"><label>Playback speed <b>{speed.toFixed(2)}×</b></label><input type="range" aria-label="Playback speed" min=".25" max="2" step=".05" value={speed} onChange={e=>setSpeed(+e.target.value)}/><label><input type="checkbox" checked={showSkeleton} onChange={e=>setShowSkeleton(e.target.checked)}/> Skeleton overlay</label><button className="import-motion" onClick={loadModelFile}><Upload/>Import GLB with animations</button></div></div>:<div className="inspector"><div className="ins-head"><div><span>ACTIVE PROJECT</span><h2>{job.name}</h2></div><button aria-label="Project options">•••</button></div>{job.imageHash&&<div className="provenance">SOURCE VERIFIED <b>{job.imageHash.slice(0,12)}</b></div>}<div className="progress"><div><span>{workerMessage||'Pipeline progress'}</span><b>{job.progress}%</b></div><i><em className={running?'indeterminate':''} style={{width:`${job.progress}%`}}/></i></div><div className="steps">{job.stages.map((s,i)=><div className={`step ${s.status}`} key={s.id}><div className="stepnum">{s.status==='done'?'✓':s.status==='running'?'··':i+1}</div><div><b>{s.name}</b><span>{s.detail}</span></div><ChevronRight/></div>)}</div><button className="run" disabled={running||job.status==='complete'} onClick={advance}><Zap/>{running?'Worker running…':job.status==='complete'?'Pipeline complete':'Run next stage'}</button><button className="import-motion" disabled={running||job.id==='demo'||job.status==='complete'} onClick={runAll}><Play/>Run full pipeline</button><p className="hint"><ShieldCheck/> Every stage is non-destructive and versioned.</p></div>}</div>
-{motionMode?<><div className="timeline"><button aria-label="Reset playback" onClick={()=>{setPlaying(false);setScrub(0)}}><RotateCcw/></button><button className="transport" aria-label={playing?'Pause':'Play'} onClick={()=>setPlaying(x=>!x)}>{playing?<Pause/>:<Play/>}</button><span>{scrub.toFixed(2)}s</span><input type="range" aria-label="Timeline scrub" min="0" max={playback.duration||1} step=".01" value={Math.min(scrub,playback.duration||1)} onChange={e=>{setPlaying(false);setScrub(+e.target.value)}}/><span>{(playback.duration||0).toFixed(2)}s</span></div><div className="library-section"><div className="asset-head"><div><span>LICENSE-AWARE ASSET SOURCES</span><b>Characters & motion libraries</b></div><small>Assets are opened at source; verify each creator license before commercial use.</small></div><div className="library-cards">{libraries.map(x=><button key={x.name} onClick={()=>openURL(x.url)}><Library/><span><b>{x.name}</b><small>{x.detail}</small></span><ChevronRight/></button>)}</div></div></>:<div className="bottom"><div className="asset-head"><div><span>PROJECT ASSETS</span><b>Recent generations</b></div><button onClick={openWorkspace}><FolderOpen/> Open workspace</button></div><div className="cards">{jobs.slice(0,3).map((j,i)=><button key={j.id} className={`card ${selected===j.id?'chosen':''}`} onClick={()=>setSelected(j.id)}><div className={`thumb t${i}`}><Layers3/><span>{j.progress}%</span></div><b>{j.name}</b><small>{j.status} · {j.artifacts?.length||0} artifacts</small></button>)}<button className="upload" onClick={importImage}><div><FileImage/><Plus/></div><b>Import reference image</b><small>PNG, JPG, WEBP · immutable workspace copy</small></button></div></div>}</section>}</main></div>}
+const headerCopy: Record<View, [string, string]> = {
+  projects: ['WORKSPACE / PROJECTS', 'Turn one image into a living character.'],
+  studio: ['WORKSPACE / STUDIO', 'Studio'],
+  library: ['WORKSPACE / LIBRARY', 'Preview real skeletal clips and asset sources.'],
+  settings: ['WORKSPACE / SETTINGS', 'RunPod GPU connection'],
+};
+
+function App() {
+  const [view, setView] = useState<View>('projects');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [notice, setNotice] = useState('');
+  const [running, setRunning] = useState(false);
+  const [workerMessage, setWorkerMessage] = useState('');
+  const [runpod, setRunpod] = useState<RunPodConfig>({endpointId: '', baseUrl: 'https://api.runpod.ai/v2', configured: false, keySource: 'none'});
+
+  const job = jobs.find(j => j.id === selectedId) || null;
+
+  useEffect(() => {
+    api.listJobs().then(x => setJobs(x || [])).catch(() => {});
+    api.getRunPodConfig().then(x => x && setRunpod(x)).catch(() => {});
+    let off = () => {};
+    try {
+      off = EventsOn('worker:event', (event: any) => { if (event?.message) setWorkerMessage(event.message); });
+    } catch {}
+    return () => off();
+  }, []);
+
+  const updateJob = (j: Job) => setJobs(v => v.map(x => (x.id === j.id ? j : x)));
+
+  async function importImage() {
+    try {
+      const j = await api.importReference();
+      if (j) {
+        setJobs(v => [j, ...v.filter(x => x.id !== j.id)]);
+        setSelectedId(j.id);
+        setView('studio');
+        setNotice('Reference copied with SHA-256 provenance. Pipeline을 실행하세요.');
+      }
+    } catch (e) {
+      if (!isCancelled(e)) setNotice(errText(e));
+    }
+  }
+  async function runNext() {
+    if (!job) return;
+    setRunning(true);
+    setWorkerMessage('Starting isolated worker…');
+    try {
+      const j = await api.runNextStage(job.id);
+      if (j) updateJob(j);
+      setNotice('Stage completed and artifact provenance was recorded.');
+    } catch (e) {
+      setNotice(errText(e));
+      api.listJobs().then(x => setJobs(x || [])).catch(() => {});
+    } finally {
+      setRunning(false);
+      setWorkerMessage('');
+    }
+  }
+  async function runAll() {
+    if (!job) return;
+    setRunning(true);
+    setWorkerMessage('Running complete pipeline…');
+    try {
+      const j = await api.runAllStages(job.id);
+      if (j) updateJob(j);
+      setNotice('Complete animation-ready GLB pipeline finished.');
+    } catch (e) {
+      setNotice(errText(e));
+      api.listJobs().then(x => setJobs(x || [])).catch(() => {});
+    } finally {
+      setRunning(false);
+      setWorkerMessage('');
+    }
+  }
+  async function resetStage(stageId: string) {
+    if (!job) return;
+    try {
+      const j = await api.resetStage(job.id, stageId);
+      if (j) updateJob(j);
+      setNotice(`${stageId} 단계부터 다시 실행할 수 있습니다. 하위 단계 아티팩트는 정리되었습니다.`);
+    } catch (e) {
+      setNotice(errText(e));
+    }
+  }
+  async function deleteJob(id: string) {
+    try {
+      const list = await api.deleteJob(id);
+      setJobs(list || []);
+      if (selectedId === id) setSelectedId(null);
+      setNotice('프로젝트와 워크스페이스 파일을 삭제했습니다.');
+    } catch (e) {
+      setNotice(errText(e));
+    }
+  }
+  async function renameJob(id: string, name: string) {
+    try {
+      const j = await api.renameJob(id, name);
+      if (j) updateJob(j);
+    } catch (e) {
+      setNotice(errText(e));
+    }
+  }
+  async function exportGLB() {
+    if (!job) return;
+    try {
+      const dst = await api.exportFinalGLB(job.id);
+      if (dst) setNotice(`GLB 저장 완료 · ${dst}`);
+    } catch (e) {
+      if (!isCancelled(e)) setNotice(errText(e));
+    }
+  }
+  async function openWorkspace() {
+    if (!job) return;
+    try { await api.openWorkspace(job.id); } catch (e) { setNotice(errText(e)); }
+  }
+  function openProject(id: string) {
+    setSelectedId(id);
+    setView('studio');
+  }
+
+  const [eyebrow, title] = headerCopy[view];
+  return (
+    <div className="shell">
+      <Sidebar view={view} onNavigate={setView} runpodConfigured={runpod.configured} running={running} selectedName={job?.name || null} />
+      <main>
+        <header>
+          <div>
+            <span className="eyebrow">{eyebrow}</span>
+            <h1>{view === 'studio' && job ? job.name : title}</h1>
+          </div>
+          <div className="header-actions">
+            {view === 'studio' && job && (
+              <>
+                <button onClick={openWorkspace}><FolderOpen />Open workspace</button>
+                <button onClick={exportGLB} disabled={running}><Download />Export GLB</button>
+              </>
+            )}
+            {view !== 'settings' && (
+              <button className="primary" onClick={importImage} disabled={running}><Plus />Import character</button>
+            )}
+          </div>
+        </header>
+        {notice && view !== 'settings' && (
+          <div className="notice-wrap">
+            <button className="notice" onClick={() => setNotice('')}>{notice}<span>×</span></button>
+          </div>
+        )}
+        {view === 'projects' && (
+          <ProjectsView jobs={jobs} running={running} onOpen={openProject} onImport={importImage}
+            onRename={renameJob} onDelete={deleteJob} setNotice={setNotice} />
+        )}
+        {view === 'studio' && (
+          <StudioView job={job} running={running} workerMessage={workerMessage}
+            onRunNext={runNext} onRunAll={runAll} onReset={resetStage} onExport={exportGLB}
+            goProjects={() => setView('projects')} setNotice={setNotice} />
+        )}
+        {view === 'library' && <LibraryView setNotice={setNotice} />}
+        {view === 'settings' && (
+          <SettingsView runpod={runpod} setRunpod={setRunpod} running={running} setRunning={setRunning}
+            notice={notice} setNotice={setNotice} />
+        )}
+      </main>
+    </div>
+  );
+}
+
 export default App;

@@ -1,0 +1,21 @@
+export type Stage = {id: string; name: string; status: string; detail: string};
+export type Artifact = {stage: string; kind: string; path: string; metrics?: Record<string, unknown>};
+export type LogEntry = {time: string; stage: string; level: string; message: string};
+export type Job = {
+  id: string;
+  name: string;
+  created: string;
+  status: string;
+  progress: number;
+  image?: string;
+  imageHash?: string;
+  workspace?: string;
+  stages: Stage[];
+  artifacts?: Artifact[];
+  logs?: LogEntry[];
+};
+export type RunPodConfig = {endpointId: string; baseUrl: string; configured: boolean; keySource: string};
+export type RunPodStatus = {ok: boolean; message: string};
+export type SystemInfoData = {platform: string; workspace: string; jobs: number; python: boolean};
+export type View = 'projects' | 'studio' | 'library' | 'settings';
+export type StudioTab = 'pipeline' | 'motion' | 'export';

@@ -97,6 +97,25 @@ func (a *App) load() {
 	if e == nil {
 		_ = json.Unmarshal(b, &a.jobs)
 	}
+	// No worker survives an app restart: a job persisted as processing/running
+	// is a zombie and would block DeleteJob/ResetStage forever.
+	changed := false
+	for i := range a.jobs {
+		for s := range a.jobs[i].Stages {
+			if a.jobs[i].Stages[s].Status == "running" {
+				a.jobs[i].Stages[s].Status = "failed"
+				changed = true
+			}
+		}
+		if a.jobs[i].Status == "processing" {
+			a.jobs[i].Status = "failed"
+			a.jobs[i].Logs = append(a.jobs[i].Logs, LogEntry{time.Now().Format(time.RFC3339), "system", "error", "Stage interrupted by app shutdown"})
+			changed = true
+		}
+	}
+	if changed {
+		a.save()
+	}
 }
 func (a *App) save() {
 	_ = os.MkdirAll(filepath.Dir(a.dataPath()), 0755)

@@ -8,6 +8,10 @@ export function ClearRunPodConfig():Promise<main.RunPodConfig>;
 
 export function CreateJob(arg1:string):Promise<main.Job>;
 
+export function DeleteJob(arg1:string):Promise<Array<main.Job>>;
+
+export function ExportFinalGLB(arg1:string):Promise<string>;
+
 export function GetRunPodConfig():Promise<main.RunPodConfig>;
 
 export function ImportReference():Promise<main.Job>;
@@ -19,6 +23,12 @@ export function OpenExternal(arg1:string):Promise<void>;
 export function OpenWorkspace(arg1:string):Promise<void>;
 
 export function ReadArtifact(arg1:string):Promise<string>;
+
+export function ReadJobImage(arg1:string):Promise<string>;
+
+export function RenameJob(arg1:string,arg2:string):Promise<main.Job>;
+
+export function ResetStage(arg1:string,arg2:string):Promise<main.Job>;
 
 export function RunAllStages(arg1:string):Promise<main.Job>;
 

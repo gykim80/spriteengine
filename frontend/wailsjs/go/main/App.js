@@ -14,6 +14,14 @@ export function CreateJob(arg1) {
   return window['go']['main']['App']['CreateJob'](arg1);
 }
 
+export function DeleteJob(arg1) {
+  return window['go']['main']['App']['DeleteJob'](arg1);
+}
+
+export function ExportFinalGLB(arg1) {
+  return window['go']['main']['App']['ExportFinalGLB'](arg1);
+}
+
 export function GetRunPodConfig() {
   return window['go']['main']['App']['GetRunPodConfig']();
 }
@@ -36,6 +44,18 @@ export function OpenWorkspace(arg1) {
 
 export function ReadArtifact(arg1) {
   return window['go']['main']['App']['ReadArtifact'](arg1);
+}
+
+export function ReadJobImage(arg1) {
+  return window['go']['main']['App']['ReadJobImage'](arg1);
+}
+
+export function RenameJob(arg1, arg2) {
+  return window['go']['main']['App']['RenameJob'](arg1, arg2);
+}
+
+export function ResetStage(arg1, arg2) {
+  return window['go']['main']['App']['ResetStage'](arg1, arg2);
 }
 
 export function RunAllStages(arg1) {
