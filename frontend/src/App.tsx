@@ -55,6 +55,26 @@ function App() {
       if (!isCancelled(e)) setNotice(errText(e));
     }
   }
+  // drag & drop된 이미지 File을 base64로 backend에 전달해 프로젝트 생성
+  async function importImageFile(file: File) {
+    try {
+      const b64 = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1] || '');
+        r.onerror = () => reject(new Error('파일을 읽지 못했습니다'));
+        r.readAsDataURL(file);
+      });
+      const j = await api.importReferenceData(file.name, b64);
+      if (j) {
+        setJobs(v => [j, ...v.filter(x => x.id !== j.id)]);
+        setSelectedId(j.id);
+        setView('studio');
+        setNotice('Reference copied with SHA-256 provenance. Pipeline을 실행하세요.');
+      }
+    } catch (e) {
+      setNotice(errText(e));
+    }
+  }
   async function runNext() {
     if (!job) return;
     setRunning(true);
@@ -162,7 +182,7 @@ function App() {
         )}
         {view === 'projects' && (
           <ProjectsView jobs={jobs} running={running} onOpen={openProject} onImport={importImage}
-            onRename={renameJob} onDelete={deleteJob} setNotice={setNotice} />
+            onImportFile={importImageFile} onRename={renameJob} onDelete={deleteJob} setNotice={setNotice} />
         )}
         {view === 'studio' && (
           <StudioView job={job} running={running} workerMessage={workerMessage}

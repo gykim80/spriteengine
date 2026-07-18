@@ -12,6 +12,7 @@ async function call<T>(fn: (a: any) => Promise<T>): Promise<T> {
 export const api = {
   listJobs: () => call<Job[]>(a => a.ListJobs()),
   importReference: () => call<Job>(a => a.ImportReference()),
+  importReferenceData: (filename: string, base64: string) => call<Job>(a => a.ImportReferenceData(filename, base64)),
   runNextStage: (id: string) => call<Job>(a => a.RunNextStage(id)),
   runAllStages: (id: string) => call<Job>(a => a.RunAllStages(id)),
   deleteJob: (id: string) => call<Job[]>(a => a.DeleteJob(id)),

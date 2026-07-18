@@ -30,6 +30,10 @@ export function ImportReference() {
   return window['go']['main']['App']['ImportReference']();
 }
 
+export function ImportReferenceData(arg1, arg2) {
+  return window['go']['main']['App']['ImportReferenceData'](arg1, arg2);
+}
+
 export function ListJobs() {
   return window['go']['main']['App']['ListJobs']();
 }

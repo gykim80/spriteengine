@@ -16,6 +16,8 @@ export function GetRunPodConfig():Promise<main.RunPodConfig>;
 
 export function ImportReference():Promise<main.Job>;
 
+export function ImportReferenceData(arg1:string,arg2:string):Promise<main.Job>;
+
 export function ListJobs():Promise<Array<main.Job>>;
 
 export function OpenExternal(arg1:string):Promise<void>;

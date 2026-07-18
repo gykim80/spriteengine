@@ -8,23 +8,40 @@ type Props = {
   running: boolean;
   onOpen: (id: string) => void;
   onImport: () => void;
+  onImportFile: (file: File) => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   setNotice: (s: string) => void;
 };
+
+const IMAGE_EXT = /\.(png|jpe?g|webp)$/i;
 
 const statusLabel: Record<string, string> = {
   draft: 'Draft', ready: 'Ready', processing: 'Processing', complete: 'Complete', failed: 'Failed',
 };
 
 // 홈 화면: 프로젝트 생성 + 카드 그리드 관리(열기/이름변경/삭제/워크스페이스).
-export default function ProjectsView({jobs, running, onOpen, onImport, onRename, onDelete, setNotice}: Props) {
+export default function ProjectsView({jobs, running, onOpen, onImport, onImportFile, onRename, onDelete, setNotice}: Props) {
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const renameRef = useRef<HTMLInputElement>(null);
+
+  // 이미지 파일 drag & drop → 즉시 프로젝트 생성
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    if (running) return;
+    const file = Array.from(e.dataTransfer.files).find(f => IMAGE_EXT.test(f.name));
+    if (!file) {
+      setNotice('PNG, JPG, WEBP 이미지 파일만 드롭할 수 있습니다.');
+      return;
+    }
+    await onImportFile(file);
+  }
 
   // 참조 이미지 썸네일을 backend에서 data URI로 로드 (실패 시 gradient fallback 유지)
   useEffect(() => {
@@ -58,7 +75,10 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onRename,
   }
 
   return (
-    <section className="content">
+    <section className="content"
+      onDragOver={e => { e.preventDefault(); if (!running) setDragOver(true); }}
+      onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
+      onDrop={handleDrop}>
       <div className="projects-head">
         <div>
           <span className="eyebrow">ALL PROJECTS</span>
@@ -67,10 +87,10 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onRename,
         <small>이미지 한 장으로 프로젝트를 생성하고, 카드에서 관리하고, Studio에서 편집합니다.</small>
       </div>
       <div className="project-grid">
-        <button className="project-new" onClick={onImport} disabled={running}>
+        <button className={`project-new ${dragOver ? 'drag-over' : ''}`} onClick={onImport} disabled={running}>
           <div className="new-icon"><ImagePlus /><Plus /></div>
-          <b>Import reference image</b>
-          <small>PNG, JPG, WEBP · immutable workspace copy</small>
+          <b>{dragOver ? '여기에 놓아 프로젝트 생성' : 'Import reference image'}</b>
+          <small>{dragOver ? '이미지에서 즉시 파이프라인 준비' : 'PNG, JPG, WEBP · 클릭 또는 drag & drop'}</small>
         </button>
         {jobs.map(j => {
           const running_ = j.status === 'processing';

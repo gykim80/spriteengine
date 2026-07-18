@@ -198,6 +198,7 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .inline-rename svg{width:13px}
 .project-new{border:1.5px dashed var(--border-strong);background:var(--surface-2);border-radius:13px;min-height:214px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--text-2);transition:border-color .15s,background .15s}
 .project-new:hover{border-color:var(--accent-border);background:var(--accent-soft)}
+.project-new.drag-over{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .project-new:disabled{opacity:.5;cursor:not-allowed}
 .project-new .new-icon{position:relative}
 .project-new svg{width:24px;color:#8d99ad}

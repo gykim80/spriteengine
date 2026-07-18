@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -143,6 +145,52 @@ func (a *App) ResetStage(id, stageID string) (Job, error) {
 	a.jobs[i].Logs = append(a.jobs[i].Logs, LogEntry{time.Now().Format(time.RFC3339), stageID, "info", "Stage reset · downstream invalidated"})
 	a.save()
 	return a.jobs[i], nil
+}
+
+// ImportReferenceData creates a project from image bytes handed over by the
+// frontend (drag & drop). Mirrors ImportReference but needs no native dialog.
+func (a *App) ImportReferenceData(filename string, dataB64 string) (Job, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp":
+	default:
+		return Job{}, errors.New("unsupported image type (png/jpg/jpeg/webp)")
+	}
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return Job{}, errors.New("invalid image payload")
+	}
+	if len(data) == 0 {
+		return Job{}, errors.New("image is empty")
+	}
+	if len(data) > 20*1024*1024 {
+		return Job{}, errors.New("image exceeds 20MB limit")
+	}
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
+	name := strings.TrimSpace(strings.TrimSuffix(filepath.Base(filename), ext))
+	if name == "" {
+		name = "character"
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	j := a.createJobLocked(name)
+	dst := filepath.Join(j.Workspace, "source"+ext)
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		return Job{}, err
+	}
+	for i := range a.jobs {
+		if a.jobs[i].ID == j.ID {
+			a.jobs[i].Image = dst
+			a.jobs[i].ImageHash = hash
+			a.jobs[i].Status = "ready"
+			a.jobs[i].Stages[0].Detail = "Reference secured · SHA-256 " + hash[:8]
+			j = a.jobs[i]
+			break
+		}
+	}
+	a.save()
+	return j, nil
 }
 
 // exportGLBToPath copies the newest GLB artifact of the job to dst after

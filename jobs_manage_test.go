@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -195,5 +198,49 @@ func TestExportGLBRequiresArtifact(t *testing.T) {
 	job := importFixtureJob(t, a)
 	if _, err := a.exportGLBToPath(job.ID, filepath.Join(t.TempDir(), "out.glb")); err == nil {
 		t.Fatal("expected export rejection without GLB artifact")
+	}
+}
+
+func TestImportReferenceDataCreatesReadyJob(t *testing.T) {
+	isolateConfig(t)
+	a := NewApp()
+	png := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), []byte("\x00\x00\x00\x10\x00\x00\x00\x20")...)
+	job, err := a.ImportReferenceData("dropped hero.png", base64.StdEncoding.EncodeToString(png))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Name != "dropped hero" {
+		t.Fatalf("name = %q", job.Name)
+	}
+	if job.Status != "ready" || job.ImageHash == "" {
+		t.Fatalf("job not ready with provenance: %+v", job)
+	}
+	data, err := os.ReadFile(job.Image)
+	if err != nil || len(data) != len(png) {
+		t.Fatalf("workspace copy mismatch: %v len=%d", err, len(data))
+	}
+	sum := sha256.Sum256(png)
+	if job.ImageHash != hex.EncodeToString(sum[:]) {
+		t.Fatalf("hash mismatch: %s", job.ImageHash)
+	}
+	if !a.insideProjectsRoot(job.Workspace) {
+		t.Fatalf("workspace outside projects root: %s", job.Workspace)
+	}
+}
+
+func TestImportReferenceDataRejectsBadInput(t *testing.T) {
+	isolateConfig(t)
+	a := NewApp()
+	if _, err := a.ImportReferenceData("evil.exe", base64.StdEncoding.EncodeToString([]byte("x"))); err == nil {
+		t.Fatal("expected extension rejection")
+	}
+	if _, err := a.ImportReferenceData("a.png", "%%%not-base64%%%"); err == nil {
+		t.Fatal("expected base64 rejection")
+	}
+	if _, err := a.ImportReferenceData("a.png", ""); err == nil {
+		t.Fatal("expected empty payload rejection")
+	}
+	if len(a.ListJobs()) != 0 {
+		t.Fatalf("rejected imports must not leave jobs: %#v", a.ListJobs())
 	}
 }
