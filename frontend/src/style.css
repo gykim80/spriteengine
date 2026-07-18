@@ -308,6 +308,7 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .director-row button svg{width:12px}
 .director-chips{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
 .director-chips .chip{font:9px 'DM Mono';color:var(--accent);background:#fff;border:1px solid var(--accent-border);border-radius:99px;padding:3px 8px}
+.director-chips .chip-tempo{color:var(--text-2);border-color:var(--border-strong);background:var(--surface)}
 .director-chips .chip-clear{font-size:9px;color:var(--muted);background:none;border:0;text-decoration:underline;margin-left:auto}
 .director-chips .chip-clear:hover{color:var(--text-2)}
 .director-export{height:32px;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;font-size:10px;font-weight:600;color:var(--text-2);box-shadow:var(--shadow-sm)}

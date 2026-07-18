@@ -124,13 +124,20 @@ export function buildMotionClip(spec: MotionSpec): THREE.AnimationClip {
     scales.push(p.scale, p.scale, p.scale);
   };
 
+  // tempo("빠르게"/"천천히")는 프리미티브 길이를 줄이거나 늘려 전체 속도를 바꾼다
+  const tempo = spec.tempo > 0 ? spec.tempo : 1;
   for (const action of spec.actions) {
     const prim = PRIMITIVES[action.id];
-    const steps = Math.max(2, Math.round(prim.duration * FPS));
-    const start: Cursor = {...cursor};
-    for (let i = 0; i < steps; i++) push(t + (i / steps) * prim.duration, prim.sample(i / steps, start));
-    prim.commit(cursor);
-    t += prim.duration;
+    const dur = prim.duration / tempo;
+    const repeat = Math.max(1, action.repeat || 1);
+    // "두 번 발차기" → 커서를 커밋하며 프리미티브를 연속 반복
+    for (let r = 0; r < repeat; r++) {
+      const steps = Math.max(2, Math.round(dur * FPS));
+      const start: Cursor = {...cursor};
+      for (let i = 0; i < steps; i++) push(t + (i / steps) * dur, prim.sample(i / steps, start));
+      prim.commit(cursor);
+      t += dur;
+    }
   }
 
   // 마무리: 원점 복귀 (yaw는 가장 가까운 정면으로) → LoopRepeat 시 자연스럽게 이어진다

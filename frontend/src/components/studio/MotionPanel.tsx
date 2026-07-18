@@ -75,7 +75,8 @@ export default function MotionPanel({modelUrl, usingFallback, jobName, onLoadFil
     setClip(spec.clipName);
     setScrub(0);
     setPlaying(true);
-    setNotice(`연출 적용: ${spec.actions.map(a => a.label).join(' → ')}`);
+    const seq = spec.actions.map(a => (a.repeat > 1 ? `${a.label} ×${a.repeat}` : a.label)).join(' → ');
+    setNotice(`연출 적용: ${seq}${spec.tempoLabel ? ` · ${spec.tempoLabel}` : ''}`);
   }
 
   function clearMotion() {
@@ -141,7 +142,10 @@ export default function MotionPanel({modelUrl, usingFallback, jobName, onLoadFil
             {motion && (
               <>
                 <div className="director-chips" aria-label="연출된 동작 시퀀스">
-                  {motion.actions.map((a, i) => <span key={a.id} className="chip">{i > 0 ? '→ ' : ''}{a.label}</span>)}
+                  {motion.actions.map((a, i) => (
+                    <span key={a.id} className="chip">{i > 0 ? '→ ' : ''}{a.label}{a.repeat > 1 ? ` ×${a.repeat}` : ''}</span>
+                  ))}
+                  {motion.tempoLabel && <span className="chip chip-tempo">{motion.tempoLabel}</span>}
                   <button className="chip-clear" onClick={clearMotion}>해제</button>
                 </div>
                 <button className="director-export" onClick={exportAnimated} disabled={exporting}

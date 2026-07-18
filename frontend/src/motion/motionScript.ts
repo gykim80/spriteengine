@@ -5,11 +5,15 @@ export type MotionActionId =
   | 'fly' | 'kick' | 'punch' | 'jump' | 'spin' | 'dash'
   | 'run' | 'walk' | 'wave' | 'bow' | 'dance' | 'idle';
 
-export type MotionAction = {id: MotionActionId; label: string};
+export type MotionAction = {id: MotionActionId; label: string; repeat: number};
 
 export type MotionSpec = {
   prompt: string;
   actions: MotionAction[];
+  /** 전체 재생 속도 배율. "빠르게"=1.5, "천천히"=0.65, 기본 1 */
+  tempo: number;
+  /** tempo가 1이 아닐 때 UI에 표시할 수식어 라벨 */
+  tempoLabel?: string;
   /** viewport clip 목록에 표시되고 선택에 쓰이는 이름 */
   clipName: string;
 };
@@ -31,6 +35,16 @@ const LEXICON: {id: MotionActionId; label: string; pattern: RegExp}[] = [
 ];
 
 const MAX_ACTIONS = 4;
+const MAX_REPEAT = 5;
+
+// 반복 횟수 수식어: "두 번", "3번", "x2", "twice", "three times" 등
+const COUNT_PATTERN = /(\d+)\s*(?:번|회|차례|\s?times?)|(한|두|세|네|다섯)\s*(?:번|회|차례)|\b(once|twice|thrice)\b|[x×]\s*(\d+)/gi;
+const KOREAN_NUMERALS: Record<string, number> = {한: 1, 두: 2, 세: 3, 네: 4, 다섯: 5};
+const ENGLISH_COUNTS: Record<string, number> = {once: 1, twice: 2, thrice: 3};
+
+// 전체 속도 수식어 (마지막 언급이 우선)
+const TEMPO_FAST = /빨리|빠르게|빠른|신속|재빨리|재빠르|급하게|quick|fast|swift|rapid/i;
+const TEMPO_SLOW = /천천히|느리게|느린|느릿|슬로우|slowly|slow|gentle/i;
 
 /** 프롬프트에서 동작을 추출한다. 인식된 동작이 없으면 null. */
 export function parseMotionPrompt(text: string): MotionSpec | null {
@@ -39,19 +53,47 @@ export function parseMotionPrompt(text: string): MotionSpec | null {
   const found: {index: number; action: MotionAction}[] = [];
   for (const entry of LEXICON) {
     const index = prompt.search(entry.pattern);
-    if (index >= 0) found.push({index, action: {id: entry.id, label: entry.label}});
+    if (index >= 0) found.push({index, action: {id: entry.id, label: entry.label, repeat: 1}});
   }
   if (!found.length) return null;
   // 문장 내 등장 순서 → 연출 순서 ("날아서 발차기" = fly → kick)
   found.sort((a, b) => a.index - b.index);
   const seen = new Set<MotionActionId>();
-  const actions = found
+  const kept = found
     .filter(f => !seen.has(f.action.id) && (seen.add(f.action.id), true))
-    .slice(0, MAX_ACTIONS)
-    .map(f => f.action);
+    .slice(0, MAX_ACTIONS);
+
+  // 반복 수식어를 가장 가까운 동작 키워드에 귀속시킨다 ("두 번 발차기하고 세 번 점프")
+  for (const m of prompt.matchAll(COUNT_PATTERN)) {
+    const value = m[1] ? parseInt(m[1], 10)
+      : m[2] ? KOREAN_NUMERALS[m[2]]
+      : m[3] ? ENGLISH_COUNTS[m[3].toLowerCase()]
+      : parseInt(m[4], 10);
+    if (!value || value < 1) continue;
+    let best = kept[0];
+    let bestDist = Infinity;
+    for (const f of kept) {
+      const dist = Math.abs(f.index - (m.index ?? 0));
+      if (dist < bestDist) { bestDist = dist; best = f; }
+    }
+    best.action.repeat = Math.min(value, MAX_REPEAT);
+  }
+
+  // 속도 수식어: 빠르게/천천히 모두 있으면 뒤에 나온 쪽이 이긴다
+  const fastIdx = prompt.search(TEMPO_FAST);
+  const slowIdx = prompt.search(TEMPO_SLOW);
+  let tempo = 1;
+  let tempoLabel: string | undefined;
+  if (fastIdx >= 0 && (slowIdx < 0 || fastIdx > slowIdx)) { tempo = 1.5; tempoLabel = '빠르게'; }
+  else if (slowIdx >= 0) { tempo = 0.65; tempoLabel = '천천히'; }
+
+  const actions = kept.map(f => f.action);
+  const seq = actions.map(a => (a.repeat > 1 ? `${a.label}×${a.repeat}` : a.label)).join(' → ');
   return {
     prompt,
     actions,
-    clipName: `연출 · ${actions.map(a => a.label).join(' → ')}`,
+    tempo,
+    tempoLabel,
+    clipName: `연출 · ${seq}${tempoLabel ? ` · ${tempoLabel}` : ''}`,
   };
 }
