@@ -21,6 +21,8 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
   const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => { if (playing) setScrub(playback.time); }, [playback.time, playing]);
+  // 모델이 바뀌면 이전 모델의 clip 선택/scrub을 초기화
+  useEffect(() => { setClip(''); setScrub(0); setPlaying(true); }, [modelUrl]);
   const onPlayback = useCallback((s: PlaybackState) => setPlayback(s), []);
 
   // Library·Projects와 동일한 UX: GLB/glTF를 viewport에 드롭하면 즉시 미리보기
@@ -32,8 +34,6 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
       setNotice('GLB 또는 glTF 파일만 드롭할 수 있습니다.');
       return;
     }
-    setClip('');
-    setPlaying(true);
     onPreviewFile(f);
   }
 
