@@ -15,7 +15,7 @@ var assets embed.FS
 func main() {
 	app := NewApp()
 	err := wails.Run(&options.App{
-		Title: "SpriteEngine Studio", Width: 1480, Height: 920, MinWidth: 1100, MinHeight: 700,
+		Title: "AIStudio", Width: 1480, Height: 920, MinWidth: 1100, MinHeight: 700,
 		AssetServer:      &assetserver.Options{Assets: assets},
 		BackgroundColour: &options.RGBA{R: 13, G: 15, B: 18, A: 1},
 		OnStartup:        func(ctx context.Context) { app.startup(ctx) },

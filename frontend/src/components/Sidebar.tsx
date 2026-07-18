@@ -20,7 +20,7 @@ export default function Sidebar({view, onNavigate, runpodConfigured, running, se
     <aside>
       <div className="brand">
         <div className="mark"><Sparkles /></div>
-        <div><b>SPRITEENGINE</b><span>AI CHARACTER STUDIO</span></div>
+        <div><b>AISTUDIO</b><span>AI CHARACTER STUDIO</span></div>
       </div>
       <nav>
         <span className="nav-label">MENU</span>
