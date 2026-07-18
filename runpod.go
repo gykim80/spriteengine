@@ -428,6 +428,18 @@ type MotionGenerateResult struct {
 	Errors map[string]string `json:"errors"` // 프롬프트별 부분 실패 사유
 }
 
+// defaultMotionPrompts는 파이프라인 motion 단계가 RunPod HY-Motion으로 자동
+// 실행될 때 생성하는 기본 게임 클립 세트다 (한 job으로 함께 생성된다).
+func defaultMotionPrompts() []MotionPrompt {
+	return []MotionPrompt{
+		{ID: "idle", Text: "a person stands still, breathing calmly and shifting weight slightly", Duration: 4},
+		{ID: "walk", Text: "a person walks forward casually", Duration: 5},
+		{ID: "run", Text: "a person runs forward quickly", Duration: 5},
+		{ID: "jump", Text: "a person jumps high in place", Duration: 4},
+		{ID: "wave", Text: "a person waves hello with the right hand", Duration: 4},
+	}
+}
+
 // RunPodGenerateMotion은 자연어 프롬프트들을 RunPod HY-Motion-1.0으로 보내
 // SMPL 모션(JSON)을 받은 뒤, 로컬 baseline worker의 motion 단계로 rigged GLB에
 // 리타겟·베이킹한다. 결과 GLB는 artifact로 등록된다.

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -108,5 +111,104 @@ func TestSaveRunPodConfigPermissionsAndRedaction(t *testing.T) {
 	public, _ := os.ReadFile(a.dataPath())
 	if strings.Contains(string(public), "private-key") {
 		t.Fatal("key leaked into project manifest")
+	}
+}
+
+// TestRunNextStageMotionRoutesToHYMotion: RunPod이 설정돼 있으면 파이프라인
+// motion 단계가 로컬 passthrough 대신 HY-Motion 경로(모의 서버 → hy_motion.json
+// → SMPL 리타겟 베이킹)를 타고, 기본 클립 세트가 애니메이션으로 등록되는지 검증.
+func TestRunNextStageMotionRoutesToHYMotion(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("SPRITEENGINE_CONFIG_DIR", cfgDir)
+	t.Setenv("RUNPOD_ENDPOINT_ID", "")
+	t.Setenv("RUNPOD_API_KEY", "")
+
+	a := NewApp()
+	source := filepath.Join(t.TempDir(), "hero.png")
+	pngHeader := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), []byte("\x00\x00\x00\x10\x00\x00\x00\x20")...)
+	if err := os.WriteFile(source, pngHeader, 0644); err != nil {
+		t.Fatal(err)
+	}
+	job, err := a.importPath(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RunPod 미설정 상태로 prepare→reconstruct→retopo→rig까지 오프라인 실행.
+	for i := 0; i < 4; i++ {
+		if job, err = a.RunNextStage(job.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job.Stages[3].Status != "done" {
+		t.Fatalf("rig stage did not finish: %#v", job.Stages)
+	}
+
+	// 모의 HY-Motion 서버: /run이 요청된 프롬프트마다 identity 쿼터니언
+	// 3프레임 모션을 담아 즉시 COMPLETED로 응답한다.
+	joints := []string{
+		"Pelvis", "L_Hip", "R_Hip", "Spine1", "L_Knee", "R_Knee", "Spine2",
+		"L_Ankle", "R_Ankle", "Spine3", "L_Foot", "R_Foot", "Neck", "L_Collar",
+		"R_Collar", "Head", "L_Shoulder", "R_Shoulder", "L_Elbow", "R_Elbow",
+		"L_Wrist", "R_Wrist",
+	}
+	var gotPrompts []MotionPrompt
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/run") {
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			Input struct {
+				Task    string         `json:"task"`
+				Prompts []MotionPrompt `json:"prompts"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Input.Task != "motion" {
+			t.Errorf("unexpected RunPod payload: task=%q err=%v", req.Input.Task, err)
+		}
+		gotPrompts = req.Input.Prompts
+		frame := make([][]float64, len(joints))
+		for i := range frame {
+			frame[i] = []float64{0, 0, 0, 1}
+		}
+		quats := [][][]float64{frame, frame, frame}
+		trans := [][]float64{{0, 0.9, 0}, {0, 0.95, 0}, {0, 0.9, 0}}
+		motions := make([]map[string]any, 0, len(req.Input.Prompts))
+		for _, p := range req.Input.Prompts {
+			motions = append(motions, map[string]any{
+				"id": p.ID, "text": p.Text, "fps": 30,
+				"joints": joints, "quats": quats, "trans": trans,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "mock-motion", "status": "COMPLETED",
+			"output": map[string]any{"model": "HY-Motion-1.0-Lite", "motions": motions, "errors": map[string]string{}},
+		})
+	}))
+	defer srv.Close()
+	creds := fmt.Sprintf(`{"endpointId":"ep-test","apiKey":"rpa_mock_key_1234","baseUrl":%q}`, srv.URL)
+	if err := os.WriteFile(filepath.Join(cfgDir, "runpod.json"), []byte(creds), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err = a.RunNextStage(job.ID) // motion 단계
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotPrompts) != len(defaultMotionPrompts()) {
+		t.Fatalf("expected default prompt set, got %d prompts", len(gotPrompts))
+	}
+	if job.Stages[4].Status != "done" || !strings.Contains(job.Stages[4].Detail, "HY-Motion") {
+		t.Fatalf("motion stage did not route to HY-Motion: %#v", job.Stages[4])
+	}
+	last := job.Artifacts[len(job.Artifacts)-1]
+	if last.Stage != "motion" || last.Metrics["adapter"] != "hy-motion-retarget" {
+		t.Fatalf("expected hy-motion-retarget artifact, got %#v", last)
+	}
+	if clips, _ := last.Metrics["animations"].(float64); int(clips) != len(defaultMotionPrompts()) {
+		t.Fatalf("expected %d baked clips, got %v", len(defaultMotionPrompts()), last.Metrics["animations"])
+	}
+	if job.Stages[5].Status != "ready" {
+		t.Fatalf("export stage should be ready: %#v", job.Stages[5])
 	}
 }

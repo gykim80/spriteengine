@@ -314,6 +314,29 @@ func (a *App) RunNextStage(id string) (Job, error) {
 		a.emitJobUpdate(updated)
 		return updated, nil
 	}
+	// motion 단계도 RunPod이 설정돼 있으면 HY-Motion으로 실제 스켈레탈 클립을
+	// 생성한다 (artifact/log 등록은 RunPodGenerateMotion이 수행).
+	if snapshot.Stages[stageIndex].ID == "motion" && a.GetRunPodConfig().Configured {
+		result, remoteErr := a.RunPodGenerateMotion(id, defaultMotionPrompts())
+		if remoteErr != nil {
+			return a.failStage(idx, stageIndex, remoteErr)
+		}
+		a.mu.Lock()
+		a.jobs[idx].Stages[stageIndex].Status = "done"
+		a.jobs[idx].Stages[stageIndex].Detail = fmt.Sprintf("Completed · RunPod HY-Motion (%d clips)", result.Clips)
+		if stageIndex+1 < len(a.jobs[idx].Stages) {
+			a.jobs[idx].Stages[stageIndex+1].Status = "ready"
+			a.jobs[idx].Status = "ready" // processing으로 남으면 delete/reset이 영원히 거부됨
+		} else {
+			a.jobs[idx].Status = "complete"
+		}
+		a.jobs[idx].Progress = (stageIndex + 1) * 100 / len(a.jobs[idx].Stages)
+		a.save()
+		updated := a.jobs[idx]
+		a.mu.Unlock()
+		a.emitJobUpdate(updated)
+		return updated, nil
+	}
 	worker, e := a.workerPath()
 	if e != nil {
 		return a.failStage(idx, stageIndex, e)
