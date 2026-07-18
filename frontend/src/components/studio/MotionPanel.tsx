@@ -25,6 +25,26 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
   useEffect(() => { setClip(''); setScrub(0); setPlaying(true); }, [modelUrl]);
   const onPlayback = useCallback((s: PlaybackState) => setPlayback(s), []);
 
+  // 스튜디오 툴 표준 단축키: Space = 재생/일시정지, ←/→ = 0.1s 스크럽 (폼 요소 포커스 시 제외)
+  useEffect(() => {
+    const duration = playback.duration;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest('input,textarea,select,button,[contenteditable]')) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setPlaying(x => !x);
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        const step = e.key === 'ArrowRight' ? 0.1 : -0.1;
+        setPlaying(false);
+        setScrub(s => Math.min(Math.max(0, s + step), duration || 0));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [playback.duration]);
+
   // Library·Projects와 동일한 UX: GLB/glTF를 viewport에 드롭하면 즉시 미리보기
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -92,9 +112,9 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
       </div>
       <div className="timeline">
         <button aria-label="Reset playback" onClick={() => { setPlaying(false); setScrub(0); }}><RotateCcw /></button>
-        <button className="transport" aria-label={playing ? 'Pause' : 'Play'} onClick={() => setPlaying(x => !x)}>{playing ? <Pause /> : <Play />}</button>
+        <button className="transport" aria-label={playing ? 'Pause' : 'Play'} title={`${playing ? 'Pause' : 'Play'} (Space)`} onClick={() => setPlaying(x => !x)}>{playing ? <Pause /> : <Play />}</button>
         <span>{scrub.toFixed(2)}s</span>
-        <input type="range" aria-label="Timeline scrub" min="0" max={playback.duration || 1} step=".01"
+        <input type="range" aria-label="Timeline scrub" title="←/→ 키로 0.1s 스크럽" min="0" max={playback.duration || 1} step=".01"
           value={Math.min(scrub, playback.duration || 1)} onChange={e => { setPlaying(false); setScrub(+e.target.value); }} />
         <span>{(playback.duration || 0).toFixed(2)}s</span>
       </div>
