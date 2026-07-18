@@ -129,6 +129,33 @@ def check_hierarchy(gltf):
             "root": names.get(roots[0]) if len(roots) == 1 else None}
 
 
+# 클립 이름에 이 키워드가 포함되면 "이동" 모션으로 간주해 실제 수평 이동
+# 거리를 검사한다 (예: HY-Motion ckpt 미로딩 버그처럼 "run"인데 제자리인 경우
+# clip 상이성 검사만으로는 못 잡는 의미 오류를 잡기 위함). "dodge"처럼 짧은
+# 회피 스텝은 원래 이동량이 작은 게 정상이므로 제외한다 (20종 실측 결과
+# 모든 캐릭터에서 일관되게 ~0.22m — 데이터 문제가 아니라 모션 자체의 특성).
+LOCOMOTION_KEYWORDS = ("run", "walk", "sprint", "crawl", "climb", "flykick", "roll")
+MIN_LOCOMOTION_METERS = 0.3
+
+
+def _root_horizontal_travel(gltf, bin_data, anim):
+    node_by_name = {n.get("name"): i for i, n in enumerate(gltf.get("nodes", []))}
+    hips = node_by_name.get("Hips")
+    if hips is None:
+        return None
+    for ch in anim.get("channels", []):
+        if ch["target"].get("node") != hips or ch["target"].get("path") != "translation":
+            continue
+        sampler = anim["samplers"][ch["sampler"]]
+        values = _read_accessor_floats(gltf, bin_data, sampler["output"], 3)
+        if len(values) < 2:
+            return 0.0
+        xs = [v[0] for v in values]; zs = [v[2] for v in values]
+        return max(((xs[i] - xs[j]) ** 2 + (zs[i] - zs[j]) ** 2) ** 0.5
+                   for i in range(len(values)) for j in range(i))
+    return None
+
+
 def check_deformation(gltf, bin_data):
     animations = gltf.get("animations") or []
     if not animations:
@@ -154,6 +181,11 @@ def check_deformation(gltf, bin_data):
         clip_signatures[name] = hash(tuple(sig_parts))
         if energy < 1e-8:
             issues.append(f"clip {name!r}: channels are frozen (no movement across frames) — possible untrained/unconditioned generation")
+        if any(kw in str(name).lower() for kw in LOCOMOTION_KEYWORDS):
+            travel = _root_horizontal_travel(gltf, bin_data, anim)
+            if travel is not None and travel < MIN_LOCOMOTION_METERS:
+                issues.append(f"clip {name!r}: locomotion motion only travels {travel:.3f}m horizontally "
+                               f"(expected >= {MIN_LOCOMOTION_METERS}m) — may be an in-place/noise generation")
     dupes = {}
     for name, sig in clip_signatures.items():
         dupes.setdefault(sig, []).append(name)
