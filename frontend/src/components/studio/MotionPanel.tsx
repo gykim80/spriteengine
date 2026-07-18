@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useState} from 'react';
-import {Box, Film, Pause, Play, RotateCcw, Upload} from 'lucide-react';
+import {Box, Film, Pause, Play, RotateCcw, Upload, Wand2} from 'lucide-react';
 import CharacterViewport, {type PlaybackState} from '../../LazyViewport';
+import {parseMotionPrompt, type MotionSpec} from '../../motion/motionScript';
 
 type Props = {
   modelUrl: string;
@@ -19,10 +20,13 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [playback, setPlayback] = useState<PlaybackState>({duration: 0, time: 0, clips: [], active: '', loaded: false});
   const [dragOver, setDragOver] = useState(false);
+  // 텍스트 연출: 프롬프트 → 파싱된 spec → viewport에서 AnimationClip으로 컴파일
+  const [prompt, setPrompt] = useState('');
+  const [motion, setMotion] = useState<MotionSpec | null>(null);
 
   useEffect(() => { if (playing) setScrub(playback.time); }, [playback.time, playing]);
-  // 모델이 바뀌면 이전 모델의 clip 선택/scrub을 초기화
-  useEffect(() => { setClip(''); setScrub(0); setPlaying(true); }, [modelUrl]);
+  // 모델이 바뀌면 이전 모델의 clip 선택/scrub/연출을 초기화
+  useEffect(() => { setClip(''); setScrub(0); setPlaying(true); setMotion(null); }, [modelUrl]);
   const onPlayback = useCallback((s: PlaybackState) => setPlayback(s), []);
 
   // 스튜디오 툴 표준 단축키: Space = 재생/일시정지, ←/→ = 0.1s 스크럽 (폼 요소 포커스 시 제외)
@@ -57,6 +61,26 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
     onPreviewFile(f);
   }
 
+  // "날아서 발차기하는 애니메이션" 같은 문장을 파싱해 연출 clip을 만들어 즉시 재생
+  function directMotion() {
+    const spec = parseMotionPrompt(prompt);
+    if (!spec) {
+      setNotice('인식할 수 있는 동작이 없습니다. 예: "날아서 발차기하는 애니메이션", "점프하고 회전"');
+      return;
+    }
+    setMotion(spec);
+    setClip(spec.clipName);
+    setScrub(0);
+    setPlaying(true);
+    setNotice(`연출 적용: ${spec.actions.map(a => a.label).join(' → ')}`);
+  }
+
+  function clearMotion() {
+    if (motion && (clip === motion.clipName)) setClip('');
+    setMotion(null);
+    setNotice('연출을 해제했습니다.');
+  }
+
   return (
     <>
       <div className="workspace motion-workspace">
@@ -71,7 +95,7 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
               <button onClick={onLoadFile}>Load GLB</button>
             </div>
           </div>
-          <CharacterViewport playing={playing} clip={clip} speed={speed} time={scrub} showSkeleton={showSkeleton} modelUrl={modelUrl} onState={onPlayback} />
+          <CharacterViewport playing={playing} clip={clip} speed={speed} time={scrub} showSkeleton={showSkeleton} modelUrl={modelUrl} motion={motion} onState={onPlayback} />
           <div className="axis"><b>Y</b><span>X</span><em>Z</em></div>
           <div className="scene-note">
             <Box />
@@ -86,18 +110,33 @@ export default function MotionPanel({modelUrl, usingFallback, onLoadFile, onPrev
             <div><span>MOTION CLIPS</span><h2>Animation browser</h2></div>
             <b className="fps">60 FPS</b>
           </div>
+          <div className="motion-director">
+            <label htmlFor="motion-prompt">텍스트로 애니메이션 연출</label>
+            <div className="director-row">
+              <input id="motion-prompt" type="text" placeholder='예: 날아서 발차기하는 애니메이션'
+                value={prompt} onChange={e => setPrompt(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') directMotion(); }} />
+              <button onClick={directMotion} disabled={!prompt.trim()} title="프롬프트에서 동작을 추출해 연출 clip을 생성합니다"><Wand2 />연출</button>
+            </div>
+            {motion && (
+              <div className="director-chips" aria-label="연출된 동작 시퀀스">
+                {motion.actions.map((a, i) => <span key={a.id} className="chip">{i > 0 ? '→ ' : ''}{a.label}</span>)}
+                <button className="chip-clear" onClick={clearMotion}>해제</button>
+              </div>
+            )}
+          </div>
           <div className="clip-list">
             {playback.clips.map(name => (
               <button key={name} className={clip === name || playback.active === name ? 'selected' : ''} onClick={() => { setClip(name); setPlaying(true); }}>
                 <span className="clip-icon"><Film /></span>
-                <span><b>{name}</b><small>Embedded skeletal clip</small></span>
+                <span><b>{name}</b><small>{motion && name === motion.clipName ? 'Directed motion (text prompt)' : 'Embedded skeletal clip'}</small></span>
                 <em>{playback.active === name ? 'LIVE' : 'PLAY'}</em>
               </button>
             ))}
             {!playback.clips.length && (
               <div className="clip-empty">
                 {playback.loaded
-                  ? '이 GLB에는 embedded animation clip이 없습니다. Import GLB로 애니메이션 포함 파일을 로드하세요.'
+                  ? '이 GLB에는 embedded animation clip이 없습니다. 위 텍스트 연출로 애니메이션을 만들거나, Import GLB로 clip 포함 파일을 로드하세요.'
                   : playback.error || '모델 로딩 중…'}
               </div>
             )}

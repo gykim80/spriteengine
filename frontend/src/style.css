@@ -297,6 +297,19 @@ h1{font-size:24px;margin:8px 0 0;letter-spacing:-.5px;font-weight:700}
 .motion-workspace{height:610px}
 .motion-panel{overflow:auto}
 .fps{font:9px 'DM Mono';color:var(--green);background:var(--green-soft);border:1px solid var(--green-border);padding:5px 8px;border-radius:6px;height:fit-content}
+.motion-director{margin-top:14px;padding:12px;border:1px solid var(--accent-border);background:var(--accent-soft);border-radius:10px;display:grid;gap:8px}
+.motion-director>label{font-size:10px;color:var(--text-2);font-weight:600}
+.director-row{display:flex;gap:6px}
+.director-row input{flex:1;min-width:0;height:32px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);padding:0 10px;font-size:11px;color:var(--text)}
+.director-row input:focus{outline:none;border-color:var(--accent)}
+.director-row button{height:32px;padding:0 11px;display:flex;align-items:center;gap:5px;background:var(--accent);color:#fff;border:0;border-radius:8px;font-size:10px;font-weight:600;box-shadow:0 3px 8px rgba(0,87,255,.28)}
+.director-row button:hover{background:var(--accent-strong)}
+.director-row button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
+.director-row button svg{width:12px}
+.director-chips{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
+.director-chips .chip{font:9px 'DM Mono';color:var(--accent);background:#fff;border:1px solid var(--accent-border);border-radius:99px;padding:3px 8px}
+.director-chips .chip-clear{font-size:9px;color:var(--muted);background:none;border:0;text-decoration:underline;margin-left:auto}
+.director-chips .chip-clear:hover{color:var(--text-2)}
 .clip-list{display:grid;gap:8px;margin-top:18px}
 .clip-list>button{display:grid;grid-template-columns:38px 1fr auto;align-items:center;gap:10px;text-align:left;border:1px solid var(--border);background:var(--surface);border-radius:10px;padding:8px;color:var(--text-2);transition:border-color .15s,background .15s}
 .clip-list>button:hover{border-color:var(--accent-border)}
