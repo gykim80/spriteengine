@@ -105,7 +105,8 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
       <div className="toolbar">
         <div className="tabs studio-tabs" role="tablist" onKeyDown={onTabsKey}>
           {([['pipeline', 'Pipeline'], ['motion', 'Motion'], ['export', 'Export']] as Array<[StudioTab, string]>).map(([t, label]) => (
-            <button key={t} role="tab" data-tab={t} aria-selected={tab === t} tabIndex={tab === t ? 0 : -1}
+            <button key={t} role="tab" data-tab={t} id={`studio-tab-${t}`} aria-controls="studio-panel"
+              aria-selected={tab === t} tabIndex={tab === t ? 0 : -1}
               className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{label}</button>
           ))}
         </div>
@@ -114,17 +115,19 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
           <span>{job.id}</span>
         </div>
       </div>
-      {tab === 'pipeline' && (
-        <PipelinePanel job={job} running={running} workerMessage={workerMessage} artifactUrl={artifactUrl}
-          onRunNext={onRunNext} onRunAll={onRunAll} onReset={onReset} />
-      )}
-      {tab === 'motion' && (
-        <MotionPanel modelUrl={motionModel || '/models/Soldier.glb'} usingFallback={!motionModel}
-          onLoadFile={loadModelFile} onPreviewFile={previewModelFile} setNotice={setNotice} />
-      )}
-      {tab === 'export' && (
-        <ExportPanel job={job} running={running} onExport={onExport} onPreview={previewArtifact} setNotice={setNotice} />
-      )}
+      <div role="tabpanel" id="studio-panel" aria-labelledby={`studio-tab-${tab}`}>
+        {tab === 'pipeline' && (
+          <PipelinePanel job={job} running={running} workerMessage={workerMessage} artifactUrl={artifactUrl}
+            onRunNext={onRunNext} onRunAll={onRunAll} onReset={onReset} />
+        )}
+        {tab === 'motion' && (
+          <MotionPanel modelUrl={motionModel || '/models/Soldier.glb'} usingFallback={!motionModel}
+            onLoadFile={loadModelFile} onPreviewFile={previewModelFile} setNotice={setNotice} />
+        )}
+        {tab === 'export' && (
+          <ExportPanel job={job} running={running} onExport={onExport} onPreview={previewArtifact} setNotice={setNotice} />
+        )}
+      </div>
     </section>
   );
 }
