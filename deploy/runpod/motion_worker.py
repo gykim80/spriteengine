@@ -93,8 +93,20 @@ def main():
 
     from hymotion.utils.t2m_runtime import T2MRuntime
 
+    # 주의: ckpt_name을 생략하면 T2MRuntime 기본값 "latest.ckpt"(cwd 상대)가 되는데,
+    # load_in_demo는 파일이 없으면 warnings.warn만 찍고 랜덤 초기화 가중치로
+    # 진행한다. 모델이 adaLN-Zero 초기화라 조건화 gate가 전부 0 → 텍스트가
+    # 완전히 무시되고 같은 seed/duration이면 프롬프트와 무관하게 동일한 모션이
+    # 나온다. 반드시 절대경로를 넘기고 존재를 선검증한다.
+    ckpt = os.path.join(root, "ckpts/tencent/HY-Motion-1.0-Lite/latest.ckpt")
+    if not os.path.isfile(ckpt):
+        sys.stdout.write("\n" + json.dumps({
+            "motions": [], "errors": {"_runtime": f"checkpoint missing: {ckpt}"},
+        }) + "\n")
+        return
     runtime = T2MRuntime(
         config_path=os.path.join(root, "ckpts/tencent/HY-Motion-1.0-Lite/config.yml"),
+        ckpt_name=ckpt,
         disable_prompt_engineering=True,  # LLM 리라이터 없이 원문 프롬프트 사용
     )
     motions, errors = [], {}

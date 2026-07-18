@@ -94,6 +94,10 @@ from hymotion.utils.t2m_runtime import T2MRuntime  # noqa: F401
 from hymotion.pipeline.body_model import construct_smpl_data_dict  # noqa: F401
 cfg = Path("/runpod-volume/hymotion10/ckpts/tencent/HY-Motion-1.0-Lite/config.yml")
 assert cfg.is_file(), f"missing {cfg}"
+# latest.ckpt가 없으면 T2MRuntime이 경고만 찍고 랜덤 가중치로 생성한다(치명적) —
+# 실파일(수 GB)인지까지 확인한다.
+ckpt = cfg.with_name("latest.ckpt")
+assert ckpt.is_file() and ckpt.stat().st_size > 10**9, f"missing/short {ckpt}"
 # stats/*.npy 등 LFS 파일이 포인터 텍스트로 남아 있지 않은지 확인
 for p in Path("/runpod-volume/hymotion10").rglob("*.npy"):
     with open(p, "rb") as f:
