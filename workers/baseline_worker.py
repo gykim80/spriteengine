@@ -46,6 +46,127 @@ def dimensions(path):
     raise ValueError("unsupported or corrupt image")
 
 
+# --- GLB front-projection texture baking (stdlib only) -----------------------
+# Hunyuan3D-2.1 shape-only 배포는 지오메트리만 반환하므로, retopo 단계에서
+# 참조 이미지를 정면 투영(front projection) UV로 베이킹해 회색 프리뷰를 없앤다.
+GLB_MAGIC, CHUNK_JSON, CHUNK_BIN = 0x46546C67, 0x4E4F534A, 0x004E4942
+
+
+def _read_glb(path):
+    data = open(path, "rb").read()
+    if len(data) < 12 or struct.unpack("<I", data[:4])[0] != GLB_MAGIC:
+        raise ValueError("not a GLB file")
+    json_chunk, bin_chunk, offset = None, b"", 12
+    while offset + 8 <= len(data):
+        clen, ctype = struct.unpack("<II", data[offset:offset + 8])
+        chunk = data[offset + 8:offset + 8 + clen]
+        if ctype == CHUNK_JSON:
+            json_chunk = chunk
+        elif ctype == CHUNK_BIN:
+            bin_chunk = chunk
+        offset += 8 + clen
+    if json_chunk is None:
+        raise ValueError("GLB is missing its JSON chunk")
+    return json.loads(json_chunk), bytearray(bin_chunk)
+
+
+def _write_glb(gltf, bin_data, path):
+    blob = bytes(bin_data) + b"\x00" * (-len(bin_data) % 4)
+    if gltf.get("buffers"):
+        gltf["buffers"][0]["byteLength"] = len(blob)
+    payload = json.dumps(gltf, separators=(",", ":")).encode()
+    payload += b" " * (-len(payload) % 4)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<III", GLB_MAGIC, 2, 12 + 8 + len(payload) + 8 + len(blob)))
+        f.write(struct.pack("<II", len(payload), CHUNK_JSON))
+        f.write(payload)
+        f.write(struct.pack("<II", len(blob), CHUNK_BIN))
+        f.write(blob)
+
+
+def _read_positions(gltf, bin_data, accessor_index):
+    acc = gltf["accessors"][accessor_index]
+    if acc.get("componentType") != 5126 or acc.get("type") != "VEC3" or "bufferView" not in acc:
+        raise ValueError("POSITION accessor is not float32 VEC3")
+    view = gltf["bufferViews"][acc["bufferView"]]
+    stride = view.get("byteStride", 12)
+    base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    return [struct.unpack_from("<fff", bin_data, base + i * stride) for i in range(acc["count"])]
+
+
+def _append_view(gltf, bin_data, blob):
+    while len(bin_data) % 4:
+        bin_data.append(0)
+    view = {"buffer": 0, "byteOffset": len(bin_data), "byteLength": len(blob)}
+    bin_data.extend(blob)
+    gltf.setdefault("bufferViews", []).append(view)
+    return len(gltf["bufferViews"]) - 1
+
+
+def find_reference_image(workspace):
+    prepare_dir = os.path.join(workspace, "prepare")
+    if not os.path.isdir(prepare_dir):
+        return None
+    for name in sorted(os.listdir(prepare_dir)):
+        if os.path.splitext(name)[1].lower() in (".png", ".jpg", ".jpeg"):
+            return os.path.join(prepare_dir, name)
+    return None
+
+
+def bake_texture(glb_path, image_path, output_path):
+    """참조 이미지를 정면(+Z 시점, XY 평면) 투영 UV로 베이킹한 GLB를 쓴다.
+
+    True면 output_path에 텍스처 포함 GLB가 생성된 것이고, 이미 텍스처가
+    있거나 외부 버퍼를 쓰는 GLB면 False(무변경)를 반환한다.
+    """
+    gltf, bin_data = _read_glb(glb_path)
+    if gltf.get("textures") or gltf.get("images") or gltf.get("materials"):
+        return False  # 텍스처/머티리얼이 이미 있는 메시는 보존 (non-destructive)
+    buffers = gltf.get("buffers") or []
+    if not buffers or "uri" in buffers[0]:
+        return False  # 외부 버퍼 GLB는 baseline 범위 밖
+    image_bytes = open(image_path, "rb").read()
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime = "image/png"
+    elif image_bytes[:2] == b"\xff\xd8":
+        mime = "image/jpeg"
+    else:
+        return False  # glTF 표준 텍스처는 PNG/JPEG만 허용
+
+    textured = False
+    for mesh in gltf.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            attrs = prim.get("attributes", {})
+            if "POSITION" not in attrs or "TEXCOORD_0" in attrs:
+                continue
+            positions = _read_positions(gltf, bin_data, attrs["POSITION"])
+            min_x, max_x = min(p[0] for p in positions), max(p[0] for p in positions)
+            min_y, max_y = min(p[1] for p in positions), max(p[1] for p in positions)
+            span_x, span_y = (max_x - min_x) or 1.0, (max_y - min_y) or 1.0
+            uv = bytearray()
+            for x, y, _ in positions:
+                # glTF의 v축은 이미지 상단이 0이므로 y를 뒤집는다.
+                uv += struct.pack("<ff", (x - min_x) / span_x, 1.0 - (y - min_y) / span_y)
+            view = _append_view(gltf, bin_data, uv)
+            gltf["accessors"].append({"bufferView": view, "componentType": 5126,
+                                      "count": len(positions), "type": "VEC2"})
+            attrs["TEXCOORD_0"] = len(gltf["accessors"]) - 1
+            prim["material"] = 0  # 아래에서 materials를 투영 머티리얼 하나로 교체
+            textured = True
+    if not textured:
+        return False
+
+    image_view = _append_view(gltf, bin_data, image_bytes)
+    gltf["images"] = [{"mimeType": mime, "bufferView": image_view}]
+    gltf["samplers"] = [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}]
+    gltf["textures"] = [{"source": 0, "sampler": 0}]
+    gltf["materials"] = [{"name": "FrontProjectedBaseColor", "doubleSided": True,
+                          "pbrMetallicRoughness": {"baseColorTexture": {"index": 0},
+                                                   "metallicFactor": 0.0, "roughnessFactor": 1.0}}]
+    _write_glb(gltf, bin_data, output_path)
+    return True
+
+
 def run(req):
     job = req["jobId"]
     stage = req["stage"]
@@ -83,10 +204,24 @@ def run(req):
         os.makedirs(out_dir, exist_ok=True)
         names = {"retopo":"character-clean.glb", "rig":"character-rigged.glb", "motion":"character-animated.glb", "export":"character-final.glb"}
         output = os.path.join(out_dir, names[stage])
-        shutil.copy2(os.path.abspath(req["input"]), output)
-        kinds = {"retopo":"clean-mesh", "rig":"rigged-model", "motion":"animated-model", "export":"package"}
+        source = os.path.abspath(req["input"])
         metrics = {"adapter": "passthrough-offline", "validated": True, "previewOnly": True}
-        emit("progress", jobId=job, progress=.7, message=f"Validated immutable {stage} GLB artifact")
+        baked = False
+        if stage == "retopo":
+            # shape-only 메시(텍스처 없음)에 참조 이미지를 정면 투영으로 베이킹.
+            reference = find_reference_image(workspace)
+            if reference:
+                emit("progress", jobId=job, progress=.4, message="Projecting reference image onto mesh")
+                try:
+                    baked = bake_texture(source, reference, output)
+                except Exception as exc:
+                    emit("progress", jobId=job, progress=.5, message=f"Texture projection skipped: {exc}")
+        if baked:
+            metrics = {"adapter": "front-projection-offline", "validated": True, "textured": True, "previewOnly": True}
+        else:
+            shutil.copy2(source, output)
+        kinds = {"retopo":"clean-mesh", "rig":"rigged-model", "motion":"animated-model", "export":"package"}
+        emit("progress", jobId=job, progress=.7, message=("Baked front-projected base color texture" if baked else f"Validated immutable {stage} GLB artifact"))
         emit("artifact", jobId=job, kind=kinds[stage], path=output, metrics=metrics)
     else:
         # Adapter handshake artifact for unsupported custom input.
