@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {Download, FolderOpen, Plus} from 'lucide-react';
+import {Check, Download, FolderOpen, Pencil, Plus, X} from 'lucide-react';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 import {api, errText, isCancelled} from './api';
 import type {Job, RunPodConfig, View} from './types';
