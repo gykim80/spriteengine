@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import {Box, Film, Pause, Play, RotateCcw, Upload} from 'lucide-react';
-import CharacterViewport, {PlaybackState} from '../../CharacterViewport';
+import CharacterViewport, {type PlaybackState} from '../../LazyViewport';
 
 type Props = {
   modelUrl: string;

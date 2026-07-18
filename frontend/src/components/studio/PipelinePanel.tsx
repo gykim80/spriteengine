@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react';
 import {Box, ChevronRight, Play, RotateCcw, ShieldCheck, Zap} from 'lucide-react';
-import CharacterViewport from '../../CharacterViewport';
+import CharacterViewport from '../../LazyViewport';
 import {api} from '../../api';
 import type {Job} from '../../types';
 

@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {Box, ChevronRight, Film, Library, Upload} from 'lucide-react';
-import CharacterViewport, {PlaybackState} from '../CharacterViewport';
+import CharacterViewport, {type PlaybackState} from '../LazyViewport';
 import {api} from '../api';
 
 const sources = [
