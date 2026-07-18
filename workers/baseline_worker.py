@@ -410,31 +410,34 @@ def run(req):
         output = os.path.join(out_dir, names[stage])
         source = os.path.abspath(req["input"])
         metrics = {"adapter": "passthrough-offline", "validated": True, "previewOnly": True}
-        baked = False
+        message = f"Validated immutable {stage} GLB artifact"
+        transformed = False
         if stage == "retopo":
             # shape-only 메시(텍스처 없음)에 참조 이미지를 정면 투영으로 베이킹.
             reference = find_reference_image(workspace)
             if reference:
                 emit("progress", jobId=job, progress=.4, message="Projecting reference image onto mesh")
                 try:
-                    baked = bake_texture(source, reference, output)
+                    transformed = bake_texture(source, reference, output)
+                    if transformed:
+                        metrics = {"adapter": "front-projection-offline", "validated": True, "textured": True, "previewOnly": True}
+                        message = "Baked front-projected base color texture"
                 except Exception as exc:
                     emit("progress", jobId=job, progress=.5, message=f"Texture projection skipped: {exc}")
         elif stage == "rig":
             # skeleton이 없는 static mesh에 바운딩박스 기반 humanoid rig을 추가.
             emit("progress", jobId=job, progress=.35, message="Fitting humanoid skeleton to mesh bounds")
             try:
-                baked = auto_rig(source, output)
-                if baked:
+                transformed = auto_rig(source, output)
+                if transformed:
                     metrics = {"adapter": "auto-rig-bbox", "validated": True, "skinned": True, "previewOnly": True}
+                    message = "Fitted humanoid skeleton with skin weights"
             except Exception as exc:
                 emit("progress", jobId=job, progress=.5, message=f"Auto-rig skipped: {exc}")
-        if baked:
-            metrics = {"adapter": "front-projection-offline", "validated": True, "textured": True, "previewOnly": True}
-        else:
+        if not transformed:
             shutil.copy2(source, output)
         kinds = {"retopo":"clean-mesh", "rig":"rigged-model", "motion":"animated-model", "export":"package"}
-        emit("progress", jobId=job, progress=.7, message=("Baked front-projected base color texture" if baked else f"Validated immutable {stage} GLB artifact"))
+        emit("progress", jobId=job, progress=.7, message=message)
         emit("artifact", jobId=job, kind=kinds[stage], path=output, metrics=metrics)
     else:
         # Adapter handshake artifact for unsupported custom input.
