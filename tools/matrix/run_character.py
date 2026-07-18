@@ -162,12 +162,13 @@ def bake_and_validate(name, rig_glb):
     return baked["path"], m.get("animations", 0), m.get("model", "")
 
 
-def register_in_app(name, retopo_path, rig_path, motion_path, animations, model):
+def register_in_app(name, retopo_path, rig_path, motion_path, export_path, animations, model):
     jobs_path = APP_ROOT / "jobs.json"
     jobs = json.loads(jobs_path.read_text()) if jobs_path.exists() else []
     job_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().int % 1000000:06d}"
     proj = APP_ROOT / "projects" / job_id
-    for stage, src in (("retopo", retopo_path), ("rig", rig_path), ("motion", motion_path)):
+    for stage, src in (("retopo", retopo_path), ("rig", rig_path), ("motion", motion_path),
+                       ("export", export_path)):
         dst_dir = proj / stage
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / Path(src).name
@@ -181,7 +182,7 @@ def register_in_app(name, retopo_path, rig_path, motion_path, animations, model)
     job = {
         "id": job_id, "name": f"matrix2-{name}",
         "created": time.strftime("%Y-%m-%dT%H:%M:%S+09:00"),
-        "status": "ready", "progress": 83,
+        "status": "complete", "progress": 100,
         "image": str(proj / "source.png"), "imageHash": "",
         "workspace": str(proj),
         "stages": [
@@ -190,7 +191,7 @@ def register_in_app(name, retopo_path, rig_path, motion_path, animations, model)
             {"id": "retopo", "name": "Mesh cleanup", "status": "done", "detail": "Completed · local-baseline"},
             {"id": "rig", "name": "Auto rig", "status": "done", "detail": "Completed · auto-rig-bbox (skinned, upright-normalized)"},
             {"id": "motion", "name": "Animation", "status": "done", "detail": f"Completed · RunPod HY-Motion ({animations} clips)"},
-            {"id": "export", "name": "Export", "status": "ready", "detail": "GLB / FBX / USDZ package"},
+            {"id": "export", "name": "Export", "status": "done", "detail": "Completed · passthrough-offline (validated)"},
         ],
         "artifacts": [
             {"stage": "prepare", "kind": "reference", "path": str(proj / "source.png")},
@@ -201,6 +202,8 @@ def register_in_app(name, retopo_path, rig_path, motion_path, animations, model)
              "metrics": {"adapter": "auto-rig-bbox", "skinned": True}},
             {"stage": "motion", "kind": "animated-model", "path": str(proj / "motion" / Path(motion_path).name),
              "metrics": {"adapter": "hy-motion-retarget", "animations": animations, "model": model}},
+            {"stage": "export", "kind": "package", "path": str(proj / "export" / Path(export_path).name),
+             "metrics": {"adapter": "passthrough-offline", "validated": True, "previewOnly": True}},
         ],
         "logs": [{"time": time.strftime("%Y-%m-%dT%H:%M:%S+09:00"), "stage": "system", "level": "info",
                   "message": f"matrix2 검증 산출물에서 등록 (gpt-image-2 → Hunyuan3D → auto-rig(직립 정규화) → HY-Motion {animations}클립)"}],
@@ -227,7 +230,10 @@ def main():
     retopo_path, rig_path = retopo_and_rig(args.name, recon_glb)
     generate_motion(args.name)
     motion_path, animations, model = bake_and_validate(args.name, rig_path)
-    job_id = register_in_app(args.name, retopo_path, rig_path, motion_path, animations, model)
+    exported = mp.run_worker("export", mp.WS / args.name, motion_path)
+    assert exported.get("metrics", {}).get("validated"), exported.get("metrics")
+    job_id = register_in_app(args.name, retopo_path, rig_path, motion_path,
+                             exported["path"], animations, model)
     print(f"CHARACTER_OK name={args.name} job={job_id} clips={animations}")
 
 
