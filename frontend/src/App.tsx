@@ -18,7 +18,8 @@ const headerCopy: Record<View, [string, string]> = {
 
 function App() {
   const [view, setView] = useState<View>('projects');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 마지막으로 열었던 프로젝트를 재시작 후에도 복원 (없는 id는 job 조회에서 자연히 무시됨)
+  const [selectedId, setSelectedId] = useState<string | null>(() => localStorage.getItem('se:lastProject'));
   const [jobs, setJobs] = useState<Job[]>([]);
   const [notice, setNotice] = useState('');
   const [running, setRunning] = useState(false);
@@ -31,6 +32,11 @@ function App() {
 
   // view나 프로젝트가 바뀌면 헤더 rename 편집 상태를 닫는다.
   useEffect(() => { setRenamingHead(false); }, [view, selectedId]);
+
+  useEffect(() => {
+    if (selectedId) localStorage.setItem('se:lastProject', selectedId);
+    else localStorage.removeItem('se:lastProject');
+  }, [selectedId]);
 
   useEffect(() => {
     api.listJobs().then(x => setJobs(x || [])).catch(() => {});
