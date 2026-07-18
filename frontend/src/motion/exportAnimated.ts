@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {GLTFExporter} from 'three/examples/jsm/exporters/GLTFExporter.js';
-import {buildMotionClip} from './motionClip';
+import {buildMotionClip, detectBoneMap} from './motionClip';
 import type {MotionSpec} from './motionScript';
 
 // Uint8Array → base64 (call stack 한계를 피하기 위해 chunk 단위 변환)
@@ -35,11 +35,15 @@ export async function bakeAnimatedGLBBase64(modelUrl: string, spec: MotionSpec):
   model.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale);
 
   // 연출 clip은 actor 루트를 대상으로 한다 (viewport 재생 구조와 동일)
+  const boneNames: string[] = [];
+  model.traverse(o => { if ((o as THREE.Bone).isBone) boneNames.push(o.name); });
+  const boneMap = detectBoneMap(boneNames);
+
   const actor = new THREE.Group();
   actor.name = 'actor-root';
   actor.add(model);
 
-  const clip = buildMotionClip(spec);
+  const clip = buildMotionClip(spec, boneMap);
   const out = await new GLTFExporter().parseAsync(actor, {
     binary: true,
     animations: [...gltf.animations, clip],
