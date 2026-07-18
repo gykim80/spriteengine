@@ -154,6 +154,7 @@ function App() {
   }
 
   const [eyebrow, title] = headerCopy[view];
+  const hasGLB = !!job?.artifacts?.some(a => a.path.toLowerCase().endsWith('.glb'));
   return (
     <div className="shell">
       <Sidebar view={view} onNavigate={setView} runpodConfigured={runpod.configured} running={running} selectedName={job?.name || null} />
@@ -167,7 +168,8 @@ function App() {
             {view === 'studio' && job && (
               <>
                 <button onClick={openWorkspace}><FolderOpen />Open workspace</button>
-                <button onClick={exportGLB} disabled={running}><Download />Export GLB</button>
+                <button onClick={exportGLB} disabled={running || !hasGLB}
+                  title={hasGLB ? undefined : 'GLB artifact 없음 · pipeline 먼저 실행'}><Download />Export GLB</button>
               </>
             )}
             {view !== 'settings' && (
