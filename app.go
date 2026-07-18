@@ -235,6 +235,14 @@ func nextStage(j Job) (int, bool) {
 	}
 	return 0, false
 }
+// emitJobUpdate는 stage 상태가 바뀔 때마다 frontend에 최신 Job을 push한다.
+// RunAllStages처럼 오래 걸리는 호출 중에도 UI가 실시간으로 갱신되도록 한다.
+func (a *App) emitJobUpdate(j Job) {
+	if a.ctx != nil {
+		wailsruntime.EventsEmit(a.ctx, "job:update", j)
+	}
+}
+
 func (a *App) RunNextStage(id string) (Job, error) {
 	a.mu.Lock()
 	idx := -1
@@ -261,6 +269,7 @@ func (a *App) RunNextStage(id string) (Job, error) {
 	if idx < 0 {
 		return Job{}, errors.New("job not found")
 	}
+	a.emitJobUpdate(snapshot)
 	input := snapshot.Image
 	if stageIndex > 0 && len(snapshot.Artifacts) > 0 {
 		input = snapshot.Artifacts[len(snapshot.Artifacts)-1].Path
@@ -284,6 +293,7 @@ func (a *App) RunNextStage(id string) (Job, error) {
 		a.save()
 		updated := a.jobs[idx]
 		a.mu.Unlock()
+		a.emitJobUpdate(updated)
 		return updated, nil
 	}
 	worker, e := a.workerPath()
@@ -323,6 +333,9 @@ func (a *App) RunNextStage(id string) (Job, error) {
 	for _, ev := range events {
 		if ev.Type == "error" {
 			a.jobs[idx].Stages[stageIndex].Status = "failed"
+			a.jobs[idx].Status = "failed"
+			a.save()
+			a.emitJobUpdate(a.jobs[idx])
 			return a.jobs[idx], errors.New(ev.Message)
 		}
 		if ev.Type == "artifact" {
@@ -341,6 +354,7 @@ func (a *App) RunNextStage(id string) (Job, error) {
 	}
 	a.jobs[idx].Progress = (stageIndex + 1) * 100 / len(a.jobs[idx].Stages)
 	a.save()
+	a.emitJobUpdate(a.jobs[idx])
 	return a.jobs[idx], nil
 }
 func (a *App) failStage(i, s int, cause error) (Job, error) {
@@ -350,6 +364,7 @@ func (a *App) failStage(i, s int, cause error) (Job, error) {
 	a.jobs[i].Status = "failed"
 	a.jobs[i].Logs = append(a.jobs[i].Logs, LogEntry{time.Now().Format(time.RFC3339), a.jobs[i].Stages[s].ID, "error", cause.Error()})
 	a.save()
+	a.emitJobUpdate(a.jobs[i])
 	return a.jobs[i], cause
 }
 

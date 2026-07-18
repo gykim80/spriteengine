@@ -31,10 +31,13 @@ function App() {
     api.listJobs().then(x => setJobs(x || [])).catch(() => {});
     api.getRunPodConfig().then(x => x && setRunpod(x)).catch(() => {});
     let off = () => {};
+    let offJob = () => {};
     try {
       off = EventsOn('worker:event', (event: any) => { if (event?.message) setWorkerMessage(event.message); });
+      // 실행 중인 pipeline의 stage 상태를 실시간 반영 (RunAllStages 완료 전에도 UI 갱신)
+      offJob = EventsOn('job:update', (j: Job) => { if (j?.id) setJobs(v => v.map(x => (x.id === j.id ? j : x))); });
     } catch {}
-    return () => off();
+    return () => { off(); offJob(); };
   }, []);
 
   const updateJob = (j: Job) => setJobs(v => v.map(x => (x.id === j.id ? j : x)));
