@@ -28,22 +28,40 @@ cd /srv/progress
 python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
 {
     set -euo pipefail
-    apt-get update -qq && apt-get install -y -qq libgomp1 libgl1 libglib2.0-0
     V=/runpod-volume
     mkdir -p "$V/spriteengine" "$V/u2net"
     echo "$HANDLER_B64" | base64 -d > "$V/spriteengine/handler.py"
     python3 -c "import ast; ast.parse(open('/runpod-volume/spriteengine/handler.py').read()); print('handler syntax ok')"
-    # u2net 프리워밍 + rembg 스모크 테스트 (pydeps311는 cp311 대상 — 이 이미지와 일치)
-    export U2NET_HOME="$V/u2net"
-    PYTHONPATH="$V/pydeps311" python3 - <<'PY'
+    # u2net 프리워밍: rembg/onnxruntime 임포트 스모크 테스트는 CPU SECURE pod의
+    # executable-stack 제약으로 .so 로딩이 거부되어 항상 실패한다(GPU 워커는 정상).
+    # 실동작 검증은 프로덕션 recon의 background_removed 메트릭이 담당하므로,
+    # 여기서는 모델 파일을 직접 다운로드·md5 검증하는 방식으로 프리워밍만 한다.
+    U2NET_HOME="$V/u2net" python3 - <<'PY'
+import hashlib
 import os
-from PIL import Image
-from rembg import new_session, remove
-session = new_session()  # u2net.onnx를 U2NET_HOME(볼륨)에 다운로드
-img = Image.new("RGB", (64, 64), (200, 200, 200))
-out = remove(img, session=session, bgcolor=[255, 255, 255, 0])
-assert out.mode == "RGBA", out.mode
-print("rembg smoke ok; u2net cache:", sorted(os.listdir(os.environ["U2NET_HOME"])))
+import urllib.request
+
+URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx"
+MD5 = "60024c5c889badc19c04ad937298a77b"  # rembg가 세션 생성 시 검증하는 known_hash
+path = os.path.join(os.environ["U2NET_HOME"], "u2net.onnx")
+
+
+def md5(p):
+    h = hashlib.md5()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+if os.path.exists(path) and md5(path) == MD5:
+    print(f"u2net already cached: {path} {os.path.getsize(path)} bytes")
+else:
+    urllib.request.urlretrieve(URL, path + ".tmp")
+    got = md5(path + ".tmp")
+    assert got == MD5, f"u2net md5 mismatch: {got}"
+    os.replace(path + ".tmp", path)
+    print(f"u2net downloaded: {path} {os.path.getsize(path)} bytes")
 PY
 } >> progress.log 2>&1 && echo UPDATE_OK >> progress.log || echo UPDATE_FAIL >> progress.log
 sleep 3600
