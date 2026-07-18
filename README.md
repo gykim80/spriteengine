@@ -1,4 +1,4 @@
-# AIStudio
+# Rabbit
 
 한 장의 캐릭터 이미지를 animation-ready 3D asset으로 변환하기 위한 local-first Wails studio입니다.
 
@@ -33,7 +33,7 @@ cd .. && go test ./... && go vet ./...
 wails build
 ```
 
-생성 앱은 `build/bin/AIStudio.app`입니다.
+생성 앱은 `build/bin/Rabbit.app`입니다.
 
 ## 권장 production model stack
 

@@ -4,6 +4,10 @@ build/bin/
 # go build output at repo root
 /spriteengine
 /AIStudio
+/Rabbit
+
+# Generated images from da:image skill
+.da-image/
 .DS_Store
 *.log
 

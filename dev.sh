@@ -35,5 +35,5 @@ else
   exit 1
 fi
 
-echo "[dev] Starting AIStudio at http://localhost:$PORT"
+echo "[dev] Starting Rabbit at http://localhost:$PORT"
 exec "$WAILS_BIN" dev

@@ -19,7 +19,7 @@ export default function Sidebar({view, onNavigate, runpodConfigured, running, se
   return (
     <aside>
       <div className="brand">
-        <div><b>AISTUDIO</b><span>AI CHARACTER STUDIO</span></div>
+        <div><b>RABBIT</b><span>AI CHARACTER STUDIO</span></div>
       </div>
       <nav>
         <span className="nav-label">MENU</span>

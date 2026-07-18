@@ -1,10 +1,10 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "AIStudio",
-  "outputfilename": "AIStudio",
+  "name": "Rabbit",
+  "outputfilename": "Rabbit",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
-  "author": {"name": "AIStudio"}
+  "author": {"name": "Rabbit"}
 }
