@@ -1,6 +1,6 @@
 # RunPod deployment
 
-Production worker는 **Hunyuan3D-2.1 shape pipeline**으로 입력 이미지를 실제 GLB mesh로 생성한다. RunPod network volume은 `/runpod-volume`에 mount되며 Hugging Face model cache를 worker 재시작 간 유지한다.
+Production worker는 **Hunyuan3D-2.1 shape pipeline**으로 입력 이미지를 실제 GLB mesh로 생성하고, `texture: true` 요청 시 **hy3dpaint paint pipeline**으로 멀티뷰 PBR 텍스처(뒷면 포함)까지 입힌다. RunPod network volume은 `/runpod-volume`에 mount되며 Hugging Face model cache를 worker 재시작 간 유지한다.
 
 ## Architecture
 
@@ -46,11 +46,27 @@ RunPod이 GitHub repo를 직접 clone하여 RunPod 인프라에서 이미지를 
 Input:
 
 ```json
-{"input":{"image":"<base64 또는 data URL>","seed":1234,"steps":30,"guidance_scale":5.0}}
+{"input":{"image":"<base64 또는 data URL>","seed":1234,"steps":30,"guidance_scale":5.0,
+  "texture":true,"max_num_view":6,"texture_resolution":512}}
 ```
 
-Output은 `format`, `model`, `bytes`, `glb_base64`를 포함한다. 현재 desktop orchestration의 기존 stage protocol과 실제 remote generation artifact 연결은 별도 adapter에서 수행한다.
+- `texture` (기본 `false`): hy3dpaint 멀티뷰 PBR 텍스처 생성을 opt-in 한다. 구버전 handler는 이 필드를 무시하므로 클라이언트는 하위 호환이다.
+- `max_num_view` 4–9, `texture_resolution` 256–1024. 값이 클수록 품질↑, VRAM/응답 크기↑.
+
+Output은 `format`, `model`, `bytes`, `textured`, `glb_base64`를 포함한다. Paint 단계가 실패하면 job을 실패시키지 않고 **shape-only GLB로 폴백**하며 사유를 `texture_error`에 담는다 (Studio는 artifact metrics의 `textured`/`textureError`로 노출). 이 경우 로컬 retopo 단계의 front-projection bake가 임시 텍스처를 입힌다. 텍스처가 이미 있는 GLB는 bake가 건너뛴다.
+
+## Texture (hy3dpaint) 볼륨 요구사항
+
+`bootstrap_endpoint.py`가 볼륨에 추가로 준비하는 것:
+
+- `basicsr==1.4.2`/`realesrgan==0.3.0` (`--no-deps` 증분 설치 + torchvision `functional_tensor` sed 패치)
+- `custom_rasterizer` CUDA 확장 — nvcc가 필요해 부트스트랩 pod이 worker와 같은 `runpod/pytorch` devel 이미지를 사용한다 (GPU 불필요, `TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9`)
+- `DifferentiableRenderer/mesh_inpaint_processor*.so` (pybind11 컴파일)
+- `hy3dpaint/ckpt/RealESRGAN_x4plus.pth` 체크포인트
+- HF 캐시 프리워밍: `tencent/Hunyuan3D-2.1`의 `hunyuan3d-paintpbr-v2-1/*` + `facebook/dinov2-giant` — 첫 텍스처 요청이 20분 타임아웃에 걸리지 않게 한다
+
+기존 볼륨에는 `RUNPOD_API_KEY=... python3 deploy/runpod/bootstrap_endpoint.py`를 다시 실행하면 된다 — shape 의존성은 import 검사로 건너뛰고 paint 단계만 증분으로 채워진다. 템플릿/엔드포인트 env 변경은 필요 없다 (handler가 `HUNYUAN_PAINT_ROOT` 기본값으로 sys.path를 스스로 구성).
 
 ## Cost and operational notes
 
-Hunyuan3D-2.1 README 기준 shape generation은 약 10GB VRAM, texture는 21GB, 동시 shape+texture는 29GB를 요구한다. 첫 cold start에는 image pull과 model download가 발생한다. Model cache가 채워진 뒤 network volume을 통해 이후 cold start를 줄인다. 현재 handler는 안정성을 위해 shape GLB만 생성하고 texture/rig/motion은 후속 worker stage로 분리한다.
+Hunyuan3D-2.1 README 기준 shape generation은 약 10GB VRAM, texture는 21GB, 동시 shape+texture는 29GB를 요구한다. 24GB급 카드(4090/A5000/3090/L4)에 배정되면 paint 단계가 OOM으로 실패할 수 있으나 shape GLB 폴백으로 job 자체는 성공한다. 안정적인 텍스처 생성을 원하면 endpoint GPU를 A100/L40S/A6000(48GB+)로 제한한다. 첫 cold start에는 image pull과 model download가 발생한다. Model cache가 채워진 뒤 network volume을 통해 이후 cold start를 줄인다.

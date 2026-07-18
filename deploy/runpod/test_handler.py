@@ -73,6 +73,54 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(output["glb_base64"])[:4], b"glTF")
         self.assertEqual(fake_pipeline.call_args.kwargs["num_inference_steps"], 100)
 
+    def test_texture_stage_success(self):
+        """texture=True면 paint 파이프라인이 만든 GLB가 응답에 실린다."""
+        image = base64.b64encode(tiny_png_bytes()).decode()
+        fake_pipeline = mock.Mock(return_value=[FakeMesh()])
+
+        def fake_painter(mesh_path, image_path, output_mesh_path, save_glb):
+            # 실제 hy3dpaint 계약: .obj 경로를 받아 .glb를 옆에 생성하고 obj 경로 반환
+            self.assertTrue(output_mesh_path.endswith(".obj"))
+            self.assertTrue(save_glb)
+            glb = Path(output_mesh_path.replace(".obj", ".glb"))
+            glb.write_bytes(b"glTF" + b"\x01" * 32)
+            return output_mesh_path
+
+        with mock.patch.object(handler, "pipeline", return_value=fake_pipeline), \
+             mock.patch.object(handler, "paint_pipeline", return_value=fake_painter) as paint:
+            output = handler.handler({"input": {
+                "image": image, "texture": True, "max_num_view": 8, "texture_resolution": 768,
+            }})
+        paint.assert_called_once_with(8, 768)
+        self.assertTrue(output["textured"])
+        self.assertNotIn("texture_error", output)
+        self.assertEqual(base64.b64decode(output["glb_base64"]), b"glTF" + b"\x01" * 32)
+
+    def test_texture_stage_falls_back_to_shape_glb(self):
+        """paint 실패 시 job 전체를 실패시키지 않고 shape GLB로 폴백한다."""
+        image = base64.b64encode(tiny_png_bytes()).decode()
+        fake_pipeline = mock.Mock(return_value=[FakeMesh()])
+
+        def broken_painter(**kwargs):
+            raise RuntimeError("CUDA out of memory")
+
+        with mock.patch.object(handler, "pipeline", return_value=fake_pipeline), \
+             mock.patch.object(handler, "paint_pipeline", return_value=broken_painter):
+            output = handler.handler({"input": {"image": image, "texture": True}})
+        self.assertFalse(output["textured"])
+        self.assertIn("CUDA out of memory", output["texture_error"])
+        self.assertEqual(base64.b64decode(output["glb_base64"])[:4], b"glTF")
+
+    def test_texture_disabled_by_default(self):
+        image = base64.b64encode(tiny_png_bytes()).decode()
+        fake_pipeline = mock.Mock(return_value=[FakeMesh()])
+        with mock.patch.object(handler, "pipeline", return_value=fake_pipeline), \
+             mock.patch.object(handler, "paint_pipeline") as paint:
+            output = handler.handler({"input": {"image": image}})
+        paint.assert_not_called()
+        self.assertFalse(output["textured"])
+        self.assertNotIn("texture_error", output)
+
     def test_data_url(self):
         target = Path(tempfile.mkdtemp()) / "input.png"
         png = tiny_png_bytes()

@@ -31,8 +31,9 @@ WORKER_IMAGE = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 BOOTSTRAP_POD_NAME = "spriteengine-endpoint-bootstrap"
 TEMPLATE_NAME = "spriteengine-hy3d21-volboot"
 ENDPOINT_NAME = "spriteengine-hunyuan3d21"
-# Shape generation needs ~10GB VRAM, so 24GB-class cards are acceptable
-# fallbacks when the big cards are unavailable in the volume's datacenter.
+# Shape generation needs ~10GB VRAM; texture(hy3dpaint)까지 켜면 ~29GB가 필요해
+# 24GB급 카드에서는 paint 단계가 OOM으로 실패할 수 있다 — handler가 shape GLB로
+# graceful fallback 하므로 가용성을 위해 24GB 카드도 후순위로 유지한다.
 GPU_TYPES = [
     "NVIDIA A100 80GB PCIe",
     "NVIDIA L40S",
@@ -43,8 +44,10 @@ GPU_TYPES = [
     "NVIDIA GeForce RTX 3090",
 ]
 
-# Packages that the shape-only worker never imports (texture/demo/training
-# extras) or that cannot install outside their original environment.
+# Packages that the worker never imports (demo/training extras) or that cannot
+# install outside their original environment. basicsr/realesrgan은 paint 단계에
+# 필요하지만 gfpgan/facexlib/numba 의존성 연쇄를 피하려고 아래에서 --no-deps로
+# 별도 설치한다 (cupy는 requirements.txt에만 있고 코드에서 import되지 않음).
 REQ_FILTER = "^--extra-index-url|^tb_nightly|^torchmetrics|^deepspeed|^bpy|^gradio|^fastapi|^uvicorn|^basicsr|^realesrgan|^cupy"
 
 BOOTSTRAP_SCRIPT = r"""
@@ -57,7 +60,7 @@ python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
     export DEBIAN_FRONTEND=noninteractive
     V=/runpod-volume
     apt-get update -qq
-    apt-get install -y -qq git build-essential cmake libgl1 libglib2.0-0
+    apt-get install -y -qq git build-essential cmake libgl1 libglib2.0-0 python3-dev wget curl
     if [ ! -e "$V/hunyuan3d21/requirements.txt" ]; then
         rm -rf "$V/hunyuan3d21"
         git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git "$V/hunyuan3d21"
@@ -74,12 +77,56 @@ python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
         rm -rf "$V/pydeps311"
         pip install --no-cache-dir --target "$V/pydeps311" -r /tmp/req.txt
     fi
+    # ---- hy3dpaint (texture) 단계 ----
+    # basicsr/realesrgan은 REQ_FILTER로 걸러졌으므로 --no-deps 증분 설치
+    # (gfpgan/facexlib/numba 연쇄 방지). 순수 파이썬 소의존성만 별도 추가.
+    if ! PYTHONPATH="$V/pydeps311" python3 -c "import basicsr, realesrgan" 2>/dev/null; then
+        pip install --no-cache-dir --upgrade --target "$V/pydeps311" --no-deps basicsr==1.4.2 realesrgan==0.3.0
+        pip install --no-cache-dir --upgrade --target "$V/pydeps311" addict future lmdb yapf
+    fi
+    # basicsr 1.4.2는 torchvision>=0.17에서 제거된 functional_tensor를 import한다.
+    sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' \
+        "$V/pydeps311/basicsr/data/degradations.py" || true
+    # custom_rasterizer CUDA 확장: 볼륨의 torch 2.5.1 기준으로 빌드해 pydeps311에 설치.
+    # (부트스트랩 pod은 GPU가 없어도 nvcc만 있으면 됨 — ARCH_LIST로 타깃 카드 지정)
+    if ! PYTHONPATH="$V/pydeps311" python3 -c "import custom_rasterizer" 2>/dev/null; then
+        ( cd "$V/hunyuan3d21/hy3dpaint/custom_rasterizer" && \
+          TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" PYTHONPATH="$V/pydeps311" PATH="$V/pydeps311/bin:$PATH" \
+          pip wheel --no-cache-dir --no-build-isolation --no-deps -w /tmp/wheels . )
+        pip install --no-deps --target "$V/pydeps311" /tmp/wheels/custom_rasterizer*.whl
+    fi
+    # DifferentiableRenderer의 pybind11 인페인트 모듈(.so)을 볼륨 안에 컴파일
+    if ! ls "$V/hunyuan3d21/hy3dpaint/DifferentiableRenderer"/mesh_inpaint_processor*.so >/dev/null 2>&1; then
+        ( cd "$V/hunyuan3d21/hy3dpaint/DifferentiableRenderer" && \
+          PYTHONPATH="$V/pydeps311" PATH="$V/pydeps311/bin:$PATH" bash compile_mesh_painter.sh )
+    fi
+    # RealESRGAN 체크포인트 (imageSuperNet 업스케일러)
+    mkdir -p "$V/hunyuan3d21/hy3dpaint/ckpt"
+    if [ ! -s "$V/hunyuan3d21/hy3dpaint/ckpt/RealESRGAN_x4plus.pth" ]; then
+        wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth \
+            -O "$V/hunyuan3d21/hy3dpaint/ckpt/RealESRGAN_x4plus.pth" || \
+        curl -fsSL https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth \
+            -o "$V/hunyuan3d21/hy3dpaint/ckpt/RealESRGAN_x4plus.pth"
+    fi
+    # paint 가중치 프리워밍: 첫 텍스처 요청의 콜드 스타트에서 수 GB 다운로드로
+    # 20분 타임아웃에 걸리지 않도록 볼륨 HF 캐시에 미리 받아 둔다.
+    HF_HOME="$V/huggingface" HUGGINGFACE_HUB_CACHE="$V/huggingface/hub" PYTHONPATH="$V/pydeps311" python3 - <<'PY'
+from huggingface_hub import snapshot_download
+snapshot_download("tencent/Hunyuan3D-2.1", allow_patterns=["hunyuan3d-paintpbr-v2-1/*"])
+snapshot_download("facebook/dinov2-giant", allow_patterns=["*.json", "*.safetensors", "*.txt"])
+print("paint weights warmed")
+PY
     mkdir -p "$V/spriteengine"
     echo "$HANDLER_B64" | base64 -d > "$V/spriteengine/handler.py"
     PYTHONPATH="$V/pydeps311:$V/hunyuan3d21/hy3dshape" python3 - <<'PY'
+import sys
 import runpod
 from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
-print("imports ok:", Hunyuan3DDiTFlowMatchingPipeline.__name__)
+sys.path.insert(0, "/runpod-volume/hunyuan3d21/hy3dpaint")
+import basicsr
+import custom_rasterizer
+import realesrgan
+print("imports ok:", Hunyuan3DDiTFlowMatchingPipeline.__name__, "+ paint deps")
 PY
     touch "$V/.spriteengine-bootstrap-complete"
     du -sh "$V/pydeps311" "$V/hunyuan3d21"
@@ -113,11 +160,13 @@ def launch_bootstrap_pod(key, volume_id):
         request(key, "DELETE", "/pods/" + stale["id"])
     pod = create_pod(key, {
         "name": BOOTSTRAP_POD_NAME,
-        "imageName": "python:3.11-slim",
+        # custom_rasterizer CUDA 확장 컴파일에 nvcc가 필요해 worker와 같은
+        # devel 이미지를 쓴다 (GPU는 불필요 — CPU pod에서 컴파일만 수행).
+        "imageName": WORKER_IMAGE,
         "computeType": "CPU",
         "cloudType": "SECURE",
         "vcpuCount": 8,
-        "containerDiskInGb": 15,
+        "containerDiskInGb": 40,
         "networkVolumeId": volume_id,
         "volumeMountPath": "/runpod-volume",
         "ports": ["8888/http"],

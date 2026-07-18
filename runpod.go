@@ -292,11 +292,13 @@ type runPodJobResponse struct {
 	Status string `json:"status"`
 	Error  any    `json:"error"`
 	Output struct {
-		GLB    string `json:"glb_base64"`
-		Model  string `json:"model"`
-		Format string `json:"format"`
-		Bytes  int    `json:"bytes"`
-		Error  string `json:"error"`
+		GLB          string `json:"glb_base64"`
+		Model        string `json:"model"`
+		Format       string `json:"format"`
+		Bytes        int    `json:"bytes"`
+		Error        string `json:"error"`
+		Textured     bool   `json:"textured"`
+		TextureError string `json:"texture_error"`
 	} `json:"output"`
 }
 
@@ -362,12 +364,15 @@ func (a *App) runPodReconstruct(imagePath, workspace string) (Artifact, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	// octree_resolution/face_count keep the GLB under RunPod's ~20MB response
-	// limit (above it the COMPLETED output is silently dropped by RunPod).
+	// octree_resolution/face_count/texture_resolution keep the GLB under RunPod's
+	// ~20MB response limit (above it the COMPLETED output is silently dropped).
+	// texture=true는 hy3dpaint 멀티뷰 PBR 텍스처(뒷면 포함)를 요청한다 — 미지원
+	// handler(구버전)는 이 필드를 무시하고, paint 실패 시 shape GLB로 폴백된다.
 	payload := map[string]any{"input": map[string]any{
 		"image": base64.StdEncoding.EncodeToString(image), "seed": 1234,
 		"steps": 30, "guidance_scale": 5.0,
 		"octree_resolution": 256, "face_count": 40000,
+		"texture": true, "max_num_view": 6, "texture_resolution": 512,
 	}}
 	response, err := client.runPodSync(ctx, payload)
 	if err != nil {
@@ -391,10 +396,16 @@ func (a *App) runPodReconstruct(imagePath, workspace string) (Artifact, error) {
 	if err := os.WriteFile(path, glb, 0644); err != nil {
 		return Artifact{}, err
 	}
-	return Artifact{Stage: "reconstruct", Kind: "mesh", Path: path, Metrics: map[string]any{
+	metrics := map[string]any{
 		"adapter": "runpod-hunyuan3d21", "model": response.Output.Model,
 		"bytes": len(glb), "previewOnly": false,
-	}}, nil
+		"textured": response.Output.Textured,
+	}
+	// paint 단계 실패는 job 실패가 아니다 — shape GLB는 유효하므로 사유만 남긴다.
+	if response.Output.TextureError != "" {
+		metrics["textureError"] = response.Output.TextureError
+	}
+	return Artifact{Stage: "reconstruct", Kind: "mesh", Path: path, Metrics: metrics}, nil
 }
 
 // ClearRunPodConfig removes a stale key so the app can explicitly fall back to environment credentials.
