@@ -90,12 +90,23 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
   }
 
   const motionModel = customModel || previewUrl || artifactUrl;
+  const tabOrder: StudioTab[] = ['pipeline', 'motion', 'export'];
+  // WAI-ARIA tabs 패턴: ←/→로 탭 이동, 선택된 탭만 tab 순서에 노출 (roving tabindex)
+  function onTabsKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const i = tabOrder.indexOf(tab);
+    const next = tabOrder[(i + (e.key === 'ArrowRight' ? 1 : tabOrder.length - 1)) % tabOrder.length];
+    setTab(next);
+    (e.currentTarget.querySelector(`[data-tab="${next}"]`) as HTMLElement | null)?.focus();
+  }
   return (
     <section className="content">
       <div className="toolbar">
-        <div className="tabs studio-tabs" role="tablist">
+        <div className="tabs studio-tabs" role="tablist" onKeyDown={onTabsKey}>
           {([['pipeline', 'Pipeline'], ['motion', 'Motion'], ['export', 'Export']] as Array<[StudioTab, string]>).map(([t, label]) => (
-            <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{label}</button>
+            <button key={t} role="tab" data-tab={t} aria-selected={tab === t} tabIndex={tab === t ? 0 : -1}
+              className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{label}</button>
           ))}
         </div>
         <div className={`status ${running ? 'pending' : ''}`}>
