@@ -1,4 +1,4 @@
-import type {Job, RunPodConfig, RunPodStatus, SystemInfoData} from './types';
+import type {Job, MotionGenerateResult, MotionPrompt, RunPodConfig, RunPodStatus, SystemInfoData} from './types';
 
 // Wails가 window.go.main.App에 바인딩한 Go 메서드에 대한 타입 안전 래퍼.
 const app = () => (window as any).go?.main?.App;
@@ -28,6 +28,8 @@ export const api = {
   saveAndTestRunPodConfig: (endpointId: string, apiKey: string, baseUrl: string) =>
     call<RunPodStatus>(a => a.SaveAndTestRunPodConfig(endpointId, apiKey, baseUrl)),
   testRunPod: () => call<RunPodStatus>(a => a.TestRunPod()),
+  runPodGenerateMotion: (id: string, prompts: MotionPrompt[]) =>
+    call<MotionGenerateResult>(a => a.RunPodGenerateMotion(id, prompts)),
   clearRunPodConfig: () => call<RunPodConfig>(a => a.ClearRunPodConfig()),
   systemInfo: () => call<SystemInfoData>(a => a.SystemInfo()),
 };

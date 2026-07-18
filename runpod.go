@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -287,19 +289,13 @@ func (a *App) TestRunPod() (RunPodStatus, error) {
 	return RunPodStatus{OK: true, EndpointID: client.endpointID, Message: message, Workers: workers}, nil
 }
 
+// runPodJobResponse는 task 종류(reconstruct/motion)에 따라 output 스키마가
+// 다르므로 원본 JSON을 보존하고, 각 호출부에서 자신에게 맞는 구조체로 푼다.
 type runPodJobResponse struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Error  any    `json:"error"`
-	Output struct {
-		GLB          string `json:"glb_base64"`
-		Model        string `json:"model"`
-		Format       string `json:"format"`
-		Bytes        int    `json:"bytes"`
-		Error        string `json:"error"`
-		Textured     bool   `json:"textured"`
-		TextureError string `json:"texture_error"`
-	} `json:"output"`
+	ID     string          `json:"id"`
+	Status string          `json:"status"`
+	Error  any             `json:"error"`
+	Output json.RawMessage `json:"output"`
 }
 
 func runPodError(value any) string {
@@ -348,7 +344,7 @@ func (c *runPodClient) runPodSync(ctx context.Context, payload any) (runPodJobRe
 		if detail == "" {
 			detail = "job ended with status " + response.Status
 		}
-		return response, fmt.Errorf("RunPod reconstruction failed: %s", detail)
+		return response, fmt.Errorf("RunPod job failed: %s", detail)
 	}
 	return response, nil
 }
@@ -378,13 +374,23 @@ func (a *App) runPodReconstruct(imagePath, workspace string) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
-	if response.Output.GLB == "" {
-		if response.Output.Error != "" {
-			return Artifact{}, fmt.Errorf("RunPod reconstruction failed: %s", response.Output.Error)
+	var out struct {
+		GLB          string `json:"glb_base64"`
+		Model        string `json:"model"`
+		Error        string `json:"error"`
+		Textured     bool   `json:"textured"`
+		TextureError string `json:"texture_error"`
+	}
+	if len(response.Output) > 0 {
+		_ = json.Unmarshal(response.Output, &out)
+	}
+	if out.GLB == "" {
+		if out.Error != "" {
+			return Artifact{}, fmt.Errorf("RunPod reconstruction failed: %s", out.Error)
 		}
 		return Artifact{}, errors.New("RunPod completed without a GLB output")
 	}
-	glb, err := base64.StdEncoding.DecodeString(response.Output.GLB)
+	glb, err := base64.StdEncoding.DecodeString(out.GLB)
 	if err != nil || len(glb) < 4 || string(glb[:4]) != "glTF" {
 		return Artifact{}, errors.New("RunPod output is not a valid GLB")
 	}
@@ -397,15 +403,197 @@ func (a *App) runPodReconstruct(imagePath, workspace string) (Artifact, error) {
 		return Artifact{}, err
 	}
 	metrics := map[string]any{
-		"adapter": "runpod-hunyuan3d21", "model": response.Output.Model,
+		"adapter": "runpod-hunyuan3d21", "model": out.Model,
 		"bytes": len(glb), "previewOnly": false,
-		"textured": response.Output.Textured,
+		"textured": out.Textured,
 	}
 	// paint 단계 실패는 job 실패가 아니다 — shape GLB는 유효하므로 사유만 남긴다.
-	if response.Output.TextureError != "" {
-		metrics["textureError"] = response.Output.TextureError
+	if out.TextureError != "" {
+		metrics["textureError"] = out.TextureError
 	}
 	return Artifact{Stage: "reconstruct", Kind: "mesh", Path: path, Metrics: metrics}, nil
+}
+
+// MotionPrompt는 자연어 텍스트 하나가 HY-Motion 클립 하나로 변환되는 요청 단위다.
+type MotionPrompt struct {
+	ID       string  `json:"id"`
+	Text     string  `json:"text"`
+	Duration float64 `json:"duration"`
+}
+
+type MotionGenerateResult struct {
+	Path   string            `json:"path"`   // 애니메이션이 베이킹된 GLB 경로
+	Clips  int               `json:"clips"`  // 베이킹된 클립 수
+	Model  string            `json:"model"`  // ex) HY-Motion-1.0-Lite
+	Errors map[string]string `json:"errors"` // 프롬프트별 부분 실패 사유
+}
+
+// RunPodGenerateMotion은 자연어 프롬프트들을 RunPod HY-Motion-1.0으로 보내
+// SMPL 모션(JSON)을 받은 뒤, 로컬 baseline worker의 motion 단계로 rigged GLB에
+// 리타겟·베이킹한다. 결과 GLB는 artifact로 등록된다.
+func (a *App) RunPodGenerateMotion(jobID string, prompts []MotionPrompt) (MotionGenerateResult, error) {
+	cleaned := make([]MotionPrompt, 0, len(prompts))
+	for i, p := range prompts {
+		p.Text = strings.TrimSpace(p.Text)
+		if p.Text == "" {
+			continue
+		}
+		if strings.TrimSpace(p.ID) == "" {
+			p.ID = fmt.Sprintf("motion%d", i+1)
+		}
+		if p.Duration <= 0 {
+			p.Duration = 5
+		}
+		cleaned = append(cleaned, p)
+	}
+	if len(cleaned) == 0 {
+		return MotionGenerateResult{}, errors.New("모션 프롬프트 텍스트를 입력해 주세요")
+	}
+	if len(cleaned) > 20 {
+		return MotionGenerateResult{}, errors.New("프롬프트는 한 번에 최대 20개까지 가능합니다")
+	}
+	client, err := a.runPodClient()
+	if err != nil {
+		return MotionGenerateResult{}, err
+	}
+	a.mu.Lock()
+	var job *Job
+	for i := range a.jobs {
+		if a.jobs[i].ID == jobID {
+			job = &a.jobs[i]
+			break
+		}
+	}
+	if job == nil {
+		a.mu.Unlock()
+		return MotionGenerateResult{}, errors.New("job not found")
+	}
+	// 리타겟 대상은 스킨이 있는 rig 단계 GLB가 우선; 없으면 최신 GLB로 폴백
+	// (스킨 검증은 baseline worker의 motion 단계가 수행한다).
+	riggedGLB := ""
+	for _, artifact := range job.Artifacts {
+		if strings.HasSuffix(strings.ToLower(artifact.Path), ".glb") {
+			if artifact.Stage == "rig" {
+				riggedGLB = artifact.Path
+			} else if riggedGLB == "" {
+				riggedGLB = artifact.Path
+			}
+		}
+	}
+	workspace := job.Workspace
+	a.mu.Unlock()
+	if riggedGLB == "" {
+		return MotionGenerateResult{}, errors.New("리깅된 GLB가 없습니다 — 파이프라인을 rig 단계까지 먼저 실행해 주세요")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	payload := map[string]any{"input": map[string]any{
+		"task": "motion", "prompts": cleaned, "seed": 42, "cfg_scale": 5.0,
+	}}
+	response, err := client.runPodSync(ctx, payload)
+	if err != nil {
+		return MotionGenerateResult{}, err
+	}
+	var out struct {
+		Model   string            `json:"model"`
+		Error   string            `json:"error"`
+		Errors  map[string]string `json:"errors"`
+		Motions []struct {
+			ID string `json:"id"`
+		} `json:"motions"`
+	}
+	if len(response.Output) == 0 || json.Unmarshal(response.Output, &out) != nil {
+		return MotionGenerateResult{}, errors.New("RunPod motion 응답을 해석할 수 없습니다")
+	}
+	if out.Error != "" {
+		return MotionGenerateResult{}, fmt.Errorf("RunPod motion 생성 실패: %s", out.Error)
+	}
+	if len(out.Motions) == 0 {
+		return MotionGenerateResult{}, errors.New("RunPod이 모션을 생성하지 못했습니다")
+	}
+	motionDir := filepath.Join(workspace, "motion")
+	if err := os.MkdirAll(motionDir, 0755); err != nil {
+		return MotionGenerateResult{}, err
+	}
+	motionJSON := filepath.Join(motionDir, "hy_motion.json")
+	if err := os.WriteFile(motionJSON, response.Output, 0644); err != nil {
+		return MotionGenerateResult{}, err
+	}
+
+	artifact, err := a.bakeMotionGLB(jobID, workspace, riggedGLB)
+	if err != nil {
+		return MotionGenerateResult{}, err
+	}
+	clips := 0
+	if n, ok := artifact.Metrics["animations"].(float64); ok {
+		clips = int(n)
+	}
+	a.mu.Lock()
+	for i := range a.jobs {
+		if a.jobs[i].ID == jobID {
+			a.jobs[i].Artifacts = append(a.jobs[i].Artifacts, artifact)
+			a.jobs[i].Logs = append(a.jobs[i].Logs, LogEntry{time.Now().Format(time.RFC3339), "motion", "info",
+				fmt.Sprintf("HY-Motion: %d개 클립을 GLB 애니메이션으로 베이킹 (%s)", clips, out.Model)})
+			a.save()
+			a.emitJobUpdate(a.jobs[i])
+			break
+		}
+	}
+	a.mu.Unlock()
+	return MotionGenerateResult{Path: artifact.Path, Clips: clips, Model: out.Model, Errors: out.Errors}, nil
+}
+
+// bakeMotionGLB는 baseline worker의 motion 단계를 서브프로세스로 실행해
+// workspace/motion/hy_motion.json의 SMPL 모션을 rigged GLB에 베이킹한다.
+func (a *App) bakeMotionGLB(jobID, workspace, riggedGLB string) (Artifact, error) {
+	worker, err := a.workerPath()
+	if err != nil {
+		return Artifact{}, err
+	}
+	req := map[string]any{"type": "run", "jobId": jobID, "stage": "motion",
+		"workspace": workspace, "input": riggedGLB, "adapter": "hy-motion-retarget"}
+	payload, _ := json.Marshal(req)
+	cmd := exec.Command("python3", worker)
+	cmd.Stdin = bytes.NewReader(append(payload, '\n'))
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return Artifact{}, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return Artifact{}, err
+	}
+	var baked *Artifact
+	var workerErr error
+	scan := bufio.NewScanner(stdout)
+	for scan.Scan() {
+		var ev workerEvent
+		if json.Unmarshal(scan.Bytes(), &ev) != nil {
+			continue
+		}
+		if ev.Type == "error" {
+			workerErr = errors.New(ev.Message)
+		}
+		if ev.Type == "artifact" {
+			baked = &Artifact{Stage: "motion", Kind: ev.Kind, Path: ev.Path, Metrics: ev.Metrics}
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		return Artifact{}, fmt.Errorf("motion bake worker failed: %v %s", err, stderr.String())
+	}
+	if workerErr != nil {
+		return Artifact{}, workerErr
+	}
+	if baked == nil {
+		return Artifact{}, errors.New("motion bake produced no artifact")
+	}
+	// passthrough(local-baseline) 결과가 아닌, 실제 리타겟 베이킹인지 확인한다.
+	if adapter, _ := baked.Metrics["adapter"].(string); adapter != "hy-motion-retarget" {
+		return Artifact{}, errors.New("모션 베이킹에는 스킨이 포함된 리깅 GLB가 필요합니다 — rig 단계를 다시 실행해 주세요")
+	}
+	return *baked, nil
 }
 
 // ClearRunPodConfig removes a stale key so the app can explicitly fall back to environment credentials.

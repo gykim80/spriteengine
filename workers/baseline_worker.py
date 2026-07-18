@@ -7,6 +7,7 @@ GPU environments are installed.
 """
 import hashlib
 import json
+import math
 import os
 import shutil
 import struct
@@ -285,6 +286,150 @@ def auto_rig(glb_path, output_path):
     return True
 
 
+# --- HY-Motion SMPL → auto-rig 리타게팅 · glTF 애니메이션 베이킹 --------------
+# RunPod HY-Motion(task=motion)이 반환한 SMPL-H 바디 22조인트 로컬 쿼터니언을
+# auto_rig()의 14조인트 스켈레톤으로 옮겨 진짜 glTF 애니메이션 채널로 굽는다.
+# 두 스켈레톤 모두 rest pose에서 조인트 로컬 프레임이 월드축 정렬(회전 없는
+# 순수 이동 노드)이므로 로컬 회전을 그대로 이식할 수 있고, 조인트 수 차이는
+# 체인 축약(Spine2⊗Spine3→Chest 등) — 로컬 쿼터니언 합성 — 으로 해소한다.
+SMPL_TO_RIG = {
+    "Hips": ("Pelvis",),
+    "Spine": ("Spine1",),
+    "Chest": ("Spine2", "Spine3"),
+    "Head": ("Neck", "Head"),
+    "LeftUpLeg": ("L_Hip",), "LeftLeg": ("L_Knee",), "LeftFoot": ("L_Ankle",),
+    "RightUpLeg": ("R_Hip",), "RightLeg": ("R_Knee",), "RightFoot": ("R_Ankle",),
+    "LeftArm": ("L_Collar", "L_Shoulder"), "LeftForeArm": ("L_Elbow",),
+    "RightArm": ("R_Collar", "R_Shoulder"), "RightForeArm": ("R_Elbow",),
+}
+SMPL_REST_HEIGHT = 1.7  # SMPL 성인 신장(m) — trans(미터)→캐릭터 단위 환산 기준
+
+
+def _quat_mul(a, b):
+    """해밀턴 곱 a⊗b (xyzw): R(a⊗b) = R(a)·R(b) — 부모 로컬 다음 자식 로컬."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
+_ZUP_TO_YUP = (-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5))  # X축 -90°: +Z↑ → +Y↑
+
+
+def _convert_zup_quat(q):
+    """Z-up 데이터의 로컬 회전을 Y-up 프레임으로 기저 변환: C ⊗ q ⊗ C⁻¹."""
+    cx, cy, cz, cw = _ZUP_TO_YUP
+    return _quat_mul(_quat_mul(_ZUP_TO_YUP, q), (-cx, -cy, -cz, cw))
+
+
+def bake_animation(glb_path, motion_payload, output_path):
+    """리깅된 GLB에 HY-Motion 응답(motions 배열)을 glTF 애니메이션으로 굽는다.
+
+    각 모션이 개별 glTF animation(이름=프롬프트 id)이 되며, 성공적으로 구운
+    클립 수를 반환한다 (skins 부재/조인트 불일치 등은 0 — 호출자가 passthrough).
+    """
+    motions = motion_payload.get("motions") or []
+    if not motions:
+        return 0
+    gltf, bin_data = _read_glb(glb_path)
+    if not gltf.get("skins"):
+        return 0
+    node_by_name = {n.get("name"): i for i, n in enumerate(gltf.get("nodes", []))}
+    if "Hips" not in node_by_name:
+        return 0
+    # HY-Motion(HumanML3D 계열)은 Y-up이 기본; AMASS 원본 스타일 Z-up 응답이
+    # 확인되면 payload.up_axis="z"로 기저 변환을 켤 수 있다.
+    zup = str(motion_payload.get("up_axis", "y")).lower() == "z"
+    hips_rest = gltf["nodes"][node_by_name["Hips"]].get("translation", [0.0, 0.0, 0.0])
+    # 캐릭터 스케일: 메시 AABB 높이 / SMPL 신장 — 루트 이동을 캐릭터 크기에 맞춤
+    ys = []
+    for mesh in gltf.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            pid = prim.get("attributes", {}).get("POSITION")
+            if pid is not None:
+                ys.extend(p[1] for p in _read_vec3(gltf, bin_data, pid, "POSITION"))
+    scale = ((max(ys) - min(ys)) if ys else 1.0) / SMPL_REST_HEIGHT or 1.0
+
+    accessors = gltf.setdefault("accessors", [])
+
+    def add_accessor(blob, count, kind, minmax=None):
+        view = _append_view(gltf, bin_data, blob)
+        acc = {"bufferView": view, "componentType": 5126, "count": count, "type": kind}
+        if minmax:
+            acc["min"], acc["max"] = minmax
+        accessors.append(acc)
+        return len(accessors) - 1
+
+    animations = []
+    for motion in motions:
+        joints = motion.get("joints") or []
+        quats = motion.get("quats") or []
+        trans = motion.get("trans") or []
+        frames = min(len(quats), len(trans))
+        if frames < 2 or not joints:
+            continue
+        fps = float(motion.get("fps") or 30.0)
+        jindex = {name: i for i, name in enumerate(joints)}
+        times = [f / fps for f in range(frames)]
+        time_acc = add_accessor(
+            b"".join(struct.pack("<f", t) for t in times), frames, "SCALAR",
+            ([times[0]], [times[-1]]))
+        samplers, channels = [], []
+
+        def add_channel(node, path, blob, kind):
+            out_acc = add_accessor(blob, frames, kind)
+            samplers.append({"input": time_acc, "output": out_acc, "interpolation": "LINEAR"})
+            channels.append({"sampler": len(samplers) - 1, "target": {"node": node, "path": path}})
+
+        for rig_name, chain in SMPL_TO_RIG.items():
+            node = node_by_name.get(rig_name)
+            if node is None or any(j not in jindex for j in chain):
+                continue
+            blob = bytearray()
+            for f in range(frames):
+                q = (0.0, 0.0, 0.0, 1.0)
+                for jname in chain:
+                    q = _quat_mul(q, tuple(quats[f][jindex[jname]]))
+                if zup:
+                    q = _convert_zup_quat(q)
+                norm = math.sqrt(sum(c * c for c in q)) or 1.0
+                blob += struct.pack("<4f", *(c / norm for c in q))
+            add_channel(node, "rotation", bytes(blob), "VEC4")
+        # 루트 이동: 첫 프레임 기준 delta를 캐릭터 스케일로 환산해 Hips rest에 더함
+        t0 = trans[0]
+        blob = bytearray()
+        for f in range(frames):
+            dx, dy, dz = (trans[f][k] - t0[k] for k in range(3))
+            if zup:
+                dx, dy, dz = dx, dz, -dy
+            blob += struct.pack("<3f", hips_rest[0] + dx * scale,
+                                hips_rest[1] + dy * scale, hips_rest[2] + dz * scale)
+        add_channel(node_by_name["Hips"], "translation", bytes(blob), "VEC3")
+        animations.append({
+            "name": str(motion.get("id") or motion.get("text") or f"motion{len(animations)}"),
+            "samplers": samplers,
+            "channels": channels,
+        })
+    if not animations:
+        return 0
+    gltf["animations"] = animations
+    _write_glb(gltf, bin_data, output_path)
+    return len(animations)
+
+
+def find_motion_payload(workspace, req):
+    """motion 단계 입력 JSON 탐색: 요청 필드 → workspace/motion/hy_motion.json."""
+    candidate = str(req.get("motionFile", "")) or os.path.join(workspace, "motion", "hy_motion.json")
+    if os.path.isfile(candidate):
+        with open(candidate, encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
 def find_reference_image(workspace):
     prepare_dir = os.path.join(workspace, "prepare")
     if not os.path.isdir(prepare_dir):
@@ -434,6 +579,22 @@ def run(req):
                     message = "Fitted humanoid skeleton with skin weights"
             except Exception as exc:
                 emit("progress", jobId=job, progress=.5, message=f"Auto-rig skipped: {exc}")
+        elif stage == "motion":
+            # HY-Motion 응답 JSON이 준비돼 있으면 SMPL→auto-rig 리타겟 후
+            # glTF 애니메이션으로 베이킹한다 (없으면 기존 passthrough).
+            try:
+                payload = find_motion_payload(workspace, req)
+                if payload:
+                    emit("progress", jobId=job, progress=.4, message="Retargeting HY-Motion clips onto rig")
+                    baked_clips = bake_animation(source, payload, output)
+                    transformed = baked_clips > 0
+                    if transformed:
+                        metrics = {"adapter": "hy-motion-retarget", "validated": True,
+                                   "animations": baked_clips, "model": str(payload.get("model", "")),
+                                   "previewOnly": True}
+                        message = f"Baked {baked_clips} HY-Motion clip(s) as glTF animations"
+            except Exception as exc:
+                emit("progress", jobId=job, progress=.5, message=f"Motion retarget skipped: {exc}")
         if not transformed:
             shutil.copy2(source, output)
         kinds = {"retopo":"clean-mesh", "rig":"rigged-model", "motion":"animated-model", "export":"package"}

@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useState} from 'react';
-import {Box, Download, Film, Pause, Play, RotateCcw, Upload, Wand2} from 'lucide-react';
+import {Box, Download, Film, Pause, Play, RotateCcw, Sparkles, Upload, Wand2} from 'lucide-react';
 import CharacterViewport, {type PlaybackState} from '../../LazyViewport';
 import {parseMotionPrompt, type MotionSpec} from '../../motion/motionScript';
 import {api, errText, isCancelled} from '../../api';
@@ -8,13 +8,15 @@ type Props = {
   modelUrl: string;
   usingFallback: boolean;
   jobName: string;
+  jobId: string;
+  onPreviewArtifact: (path: string) => Promise<void>;
   onLoadFile: () => void;
   onPreviewFile: (f: File) => void;
   setNotice: (s: string) => void;
 };
 
 // 스켈레탈 clip 재생 · 타임라인 스크럽 · 속도/스켈레톤 제어.
-export default function MotionPanel({modelUrl, usingFallback, jobName, onLoadFile, onPreviewFile, setNotice}: Props) {
+export default function MotionPanel({modelUrl, usingFallback, jobName, jobId, onPreviewArtifact, onLoadFile, onPreviewFile, setNotice}: Props) {
   const [playing, setPlaying] = useState(true);
   const [clip, setClip] = useState('');
   const [speed, setSpeed] = useState(1);
@@ -26,6 +28,7 @@ export default function MotionPanel({modelUrl, usingFallback, jobName, onLoadFil
   const [prompt, setPrompt] = useState('');
   const [motion, setMotion] = useState<MotionSpec | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => { if (playing) setScrub(playback.time); }, [playback.time, playing]);
   // 모델이 바뀌면 이전 모델의 clip 선택/scrub/연출을 초기화
@@ -77,6 +80,25 @@ export default function MotionPanel({modelUrl, usingFallback, jobName, onLoadFil
     setPlaying(true);
     const seq = spec.actions.map(a => (a.repeat > 1 ? `${a.label} ×${a.repeat}` : a.label)).join(' → ');
     setNotice(`연출 적용: ${seq}${spec.tempoLabel ? ` · ${spec.tempoLabel}` : ''}`);
+  }
+
+  // HY-Motion(RunPod)으로 자연어 → 실제 스켈레탈 모션을 생성해 rigged GLB에 베이킹.
+  // 키워드 연출(directMotion)과 달리 임의 문장을 이해한다. GPU cold start 시 수 분 소요.
+  async function generateAIMotion() {
+    const text = prompt.trim();
+    if (!text || generating) return;
+    setGenerating(true);
+    setNotice('HY-Motion으로 모션 생성 중… (GPU cold start 시 몇 분 걸릴 수 있습니다)');
+    try {
+      const result = await api.runPodGenerateMotion(jobId, [{id: 'motion1', text, duration: 5}]);
+      const failed = Object.entries(result.errors || {});
+      await onPreviewArtifact(result.path);
+      setNotice(`AI 모션 ${result.clips}개 클립 베이킹 완료 (${result.model})${failed.length ? ` · 실패: ${failed.map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}`);
+    } catch (e) {
+      if (!isCancelled(e)) setNotice(errText(e));
+    } finally {
+      setGenerating(false);
+    }
   }
 
   function clearMotion() {
@@ -139,6 +161,10 @@ export default function MotionPanel({modelUrl, usingFallback, jobName, onLoadFil
                 onKeyDown={e => { if (e.key === 'Enter') directMotion(); }} />
               <button onClick={directMotion} disabled={!prompt.trim()} title="프롬프트에서 동작을 추출해 연출 clip을 생성합니다"><Wand2 />연출</button>
             </div>
+            <button className="director-export" onClick={generateAIMotion} disabled={!prompt.trim() || generating}
+              title="HY-Motion-1.0(RunPod GPU)으로 자연어에서 실제 모션을 생성해 리깅된 모델에 베이킹합니다">
+              <Sparkles />{generating ? 'AI 모션 생성 중…' : 'AI 모션 생성 (HY-Motion)'}
+            </button>
             {motion && (
               <>
                 <div className="director-chips" aria-label="연출된 동작 시퀀스">

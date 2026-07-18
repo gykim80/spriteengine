@@ -5,7 +5,9 @@ The model cache lives on the attached network volume via HF_HOME. Responses use
 RunPod's object storage when available; base64 is retained as a portable fallback.
 """
 import base64
+import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -71,8 +73,49 @@ def decode_image(value: str, target: Path) -> None:
 MAX_ENCODED_BYTES = 18 * 1024 * 1024
 
 
+def motion_handler(payload):
+    """HY-Motion-1.0 텍스트→모션 생성. motion_worker.py 서브프로세스로 실행해
+    의존성(transformers 4.53/Qwen3)과 VRAM(~18GB)을 이 프로세스로부터 격리한다."""
+    prompts = payload.get("prompts") or []
+    if not prompts:
+        return {"error": "input.prompts is required for task=motion"}
+    if len(prompts) > 20:
+        return {"error": "too many prompts (max 20 per job)"}
+    volume = Path(os.getenv("RUNPOD_VOLUME", "/runpod-volume"))
+    env = dict(os.environ)
+    # 오버레이 우선 순서: 모션 전용 deps → 공용 torch 스택 → HY-Motion 저장소
+    env["PYTHONPATH"] = os.pathsep.join([
+        str(volume / "pydeps311_motion"),
+        str(volume / "pydeps311"),
+        str(volume / "hymotion10"),
+    ])
+    env["HYMOTION_ROOT"] = str(volume / "hymotion10")
+    env["USE_HF_MODELS"] = "1"  # Qwen3-8B/CLIP을 볼륨 HF 캐시에서 로드
+    request = json.dumps({
+        "prompts": prompts,
+        "seed": int(payload.get("seed", 42)),
+        "cfg_scale": float(payload.get("cfg_scale", 5.0)),
+    })
+    proc = subprocess.run(
+        [sys.executable, str(volume / "spriteengine" / "motion_worker.py")],
+        input=request, capture_output=True, text=True, env=env, timeout=1500,
+    )
+    if proc.returncode != 0:
+        return {"error": "motion worker failed", "stderr": proc.stderr[-4000:]}
+    # 워커 stdout에는 모델 로그가 섞인다 — 마지막 JSON 줄만 파싱한다.
+    for line in reversed(proc.stdout.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            result = json.loads(line)
+            result["model"] = "HY-Motion-1.0-Lite"
+            return result
+    return {"error": "motion worker produced no JSON output", "stderr": proc.stderr[-4000:]}
+
+
 def handler(job):
     payload = job.get("input") or {}
+    if payload.get("task") == "motion":
+        return motion_handler(payload)
     seed = int(payload.get("seed", 1234))
     steps = max(1, min(int(payload.get("steps", 30)), 100))
     guidance = float(payload.get("guidance_scale", 5.0))

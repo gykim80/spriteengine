@@ -70,6 +70,10 @@ export function RunNextStage(arg1) {
   return window['go']['main']['App']['RunNextStage'](arg1);
 }
 
+export function RunPodGenerateMotion(arg1, arg2) {
+  return window['go']['main']['App']['RunPodGenerateMotion'](arg1, arg2);
+}
+
 export function SaveAndTestRunPodConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAndTestRunPodConfig'](arg1, arg2, arg3);
 }

@@ -122,6 +122,7 @@ export default function StudioView({job, running, workerMessage, onRunNext, onRu
         )}
         {tab === 'motion' && (
           <MotionPanel modelUrl={motionModel || '/models/Soldier.glb'} usingFallback={!motionModel} jobName={job.name}
+            jobId={job.id} onPreviewArtifact={previewArtifact}
             onLoadFile={loadModelFile} onPreviewFile={previewModelFile} setNotice={setNotice} />
         )}
         {tab === 'export' && (

@@ -15,6 +15,8 @@ export type Job = {
   logs?: LogEntry[];
 };
 export type RunPodConfig = {endpointId: string; baseUrl: string; configured: boolean; keySource: string};
+export type MotionPrompt = {id: string; text: string; duration: number};
+export type MotionGenerateResult = {path: string; clips: number; model: string; errors?: Record<string, string>};
 export type RunPodStatus = {ok: boolean; message: string};
 export type SystemInfoData = {platform: string; workspace: string; jobs: number; python: boolean};
 export type View = 'projects' | 'studio' | 'library' | 'settings';

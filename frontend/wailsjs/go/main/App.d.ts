@@ -36,6 +36,8 @@ export function RunAllStages(arg1:string):Promise<main.Job>;
 
 export function RunNextStage(arg1:string):Promise<main.Job>;
 
+export function RunPodGenerateMotion(arg1:string,arg2:Array<main.MotionPrompt>):Promise<main.MotionGenerateResult>;
+
 export function SaveAndTestRunPodConfig(arg1:string,arg2:string,arg3:string):Promise<main.RunPodStatus>;
 
 export function SaveAnimatedGLB(arg1:string,arg2:string):Promise<string>;

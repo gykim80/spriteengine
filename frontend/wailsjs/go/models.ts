@@ -105,6 +105,40 @@ export namespace main {
 		}
 	}
 	
+	export class MotionGenerateResult {
+	    path: string;
+	    clips: number;
+	    model: string;
+	    errors: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new MotionGenerateResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.clips = source["clips"];
+	        this.model = source["model"];
+	        this.errors = source["errors"];
+	    }
+	}
+	export class MotionPrompt {
+	    id: string;
+	    text: string;
+	    duration: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MotionPrompt(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.text = source["text"];
+	        this.duration = source["duration"];
+	    }
+	}
 	export class RunPodConfig {
 	    endpointId: string;
 	    baseUrl: string;

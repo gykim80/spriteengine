@@ -255,5 +255,124 @@ class AutoRigTest(unittest.TestCase):
                 self.assertEqual(jname, "Head", f"vertex at y={y:.2f} should be Head, got {jname}")
 
 
+SMPLH_JOINTS = [
+    "Pelvis", "L_Hip", "R_Hip", "Spine1", "L_Knee", "R_Knee", "Spine2",
+    "L_Ankle", "R_Ankle", "Spine3", "L_Foot", "R_Foot", "Neck", "L_Collar",
+    "R_Collar", "Head", "L_Shoulder", "R_Shoulder", "L_Elbow", "R_Elbow",
+    "L_Wrist", "R_Wrist",
+]
+Q_ID = [0.0, 0.0, 0.0, 1.0]
+Q_90X = [0.7071067811865475, 0.0, 0.0, 0.7071067811865476]
+
+
+def make_motion(frames=3, spine_bend=False, trans=None):
+    """HY-Motion 응답 스키마의 합성 모션 페이로드."""
+    quats = []
+    for _ in range(frames):
+        row = [list(Q_ID) for _ in SMPLH_JOINTS]
+        if spine_bend:
+            row[SMPLH_JOINTS.index("Spine2")] = list(Q_90X)
+            row[SMPLH_JOINTS.index("Spine3")] = list(Q_90X)
+        quats.append(row)
+    return {"motions": [{
+        "id": "test-clip", "text": "test", "fps": 30, "frames": frames,
+        "joints": SMPLH_JOINTS, "quats": quats,
+        "trans": trans or [[0.0, 0.0, 0.0]] * frames,
+    }]}
+
+
+class BakeAnimationTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-anim-")
+        self.addCleanup(self.tmp.cleanup)
+        static = os.path.join(self.tmp.name, "static.glb")
+        self.rigged = os.path.join(self.tmp.name, "rigged.glb")
+        self.out = os.path.join(self.tmp.name, "animated.glb")
+        make_static_glb(static)
+        worker.auto_rig(static, self.rigged)
+
+    def read_floats(self, gltf, bin_data, acc_index, width):
+        acc = gltf["accessors"][acc_index]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        return [struct.unpack_from(f"<{width}f", bin_data, base + i * 4 * width)
+                for i in range(acc["count"])]
+
+    def channel_output(self, gltf, anim, node_name, path):
+        node = next(i for i, n in enumerate(gltf["nodes"]) if n.get("name") == node_name)
+        ch = next(c for c in anim["channels"]
+                  if c["target"] == {"node": node, "path": path})
+        return anim["samplers"][ch["sampler"]]["output"]
+
+    def test_bakes_channels_for_all_rig_joints(self):
+        self.assertEqual(worker.bake_animation(self.rigged, make_motion(), self.out), 1)
+        gltf, _ = worker._read_glb(self.out)
+        anim = gltf["animations"][0]
+        self.assertEqual(anim["name"], "test-clip")
+        # 14 조인트 회전 + Hips 이동 = 15 채널
+        self.assertEqual(len(anim["channels"]), 15)
+        rotations = [c for c in anim["channels"] if c["target"]["path"] == "rotation"]
+        self.assertEqual(len(rotations), 14)
+
+    def test_chain_collapse_composes_quaternions(self):
+        # Spine2(90°X) ⊗ Spine3(90°X) → Chest는 180°X = (1,0,0,0)
+        payload = make_motion(spine_bend=True)
+        worker.bake_animation(self.rigged, payload, self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        acc = self.channel_output(gltf, gltf["animations"][0], "Chest", "rotation")
+        for q in self.read_floats(gltf, bin_data, acc, 4):
+            self.assertAlmostEqual(abs(q[0]), 1.0, places=5)
+            self.assertAlmostEqual(q[3], 0.0, places=5)
+
+    def test_root_translation_scaled_to_character(self):
+        # 메시 높이 1.8 / SMPL 1.7 스케일로 delta가 Hips rest에 더해진다
+        trans = [[0.0, 0.0, 0.0], [0.17, 0.0, 0.0], [0.34, 0.0, 0.0]]
+        worker.bake_animation(self.rigged, make_motion(trans=trans), self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        acc = self.channel_output(gltf, gltf["animations"][0], "Hips", "translation")
+        vals = self.read_floats(gltf, bin_data, acc, 3)
+        rest = gltf["nodes"][next(i for i, n in enumerate(gltf["nodes"]) if n.get("name") == "Hips")]["translation"]
+        self.assertAlmostEqual(vals[0][0], rest[0], places=5)
+        self.assertAlmostEqual(vals[1][0], rest[0] + 0.17 * 1.8 / 1.7, places=5)
+        self.assertAlmostEqual(vals[2][1], rest[1], places=5)
+
+    def test_zup_conversion(self):
+        # Z-up의 +Y 전진은 Y-up 프레임에서 -Z가 된다: C·(0,1,0) = (0,0,-1)
+        trans = [[0.0, 0.0, 0.0], [0.0, 1.7, 0.0]]
+        payload = make_motion(frames=2, trans=trans)
+        payload["up_axis"] = "z"
+        worker.bake_animation(self.rigged, payload, self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        acc = self.channel_output(gltf, gltf["animations"][0], "Hips", "translation")
+        vals = self.read_floats(gltf, bin_data, acc, 3)
+        rest = gltf["nodes"][next(i for i, n in enumerate(gltf["nodes"]) if n.get("name") == "Hips")]["translation"]
+        self.assertAlmostEqual(vals[1][2], rest[2] - 1.8, places=5)
+        self.assertAlmostEqual(vals[1][1], rest[1], places=5)
+
+    def test_time_accessor_has_min_max(self):
+        worker.bake_animation(self.rigged, make_motion(frames=30), self.out)
+        gltf, _ = worker._read_glb(self.out)
+        anim = gltf["animations"][0]
+        inp = gltf["accessors"][anim["samplers"][0]["input"]]
+        self.assertEqual(inp["min"], [0.0])
+        self.assertAlmostEqual(inp["max"][0], 29 / 30, places=5)
+
+    def test_returns_zero_without_skin(self):
+        static = os.path.join(self.tmp.name, "unrigged.glb")
+        make_static_glb(static)
+        self.assertEqual(worker.bake_animation(static, make_motion(), self.out), 0)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_glb_structure_valid(self):
+        worker.bake_animation(self.rigged, make_motion(), self.out)
+        data = open(self.out, "rb").read()
+        magic, version, total = struct.unpack("<III", data[:12])
+        self.assertEqual((magic, version, total), (worker.GLB_MAGIC, 2, len(data)))
+        gltf, bin_data = worker._read_glb(self.out)
+        self.assertEqual(gltf["buffers"][0]["byteLength"], len(bin_data))
+        for view in gltf["bufferViews"]:
+            self.assertLessEqual(view.get("byteOffset", 0) + view["byteLength"], len(bin_data))
+
+
 if __name__ == "__main__":
     unittest.main()
