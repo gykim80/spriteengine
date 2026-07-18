@@ -7,6 +7,7 @@ Hunyuan3D-2.1 입력에 유리한 조건: 단일 전신 캐릭터, 정면, A-pos
 키: OPENAI_API_KEY 환경변수 (없으면 ~/.davinci/app.db의 image_gen_openai_key 폴백)
 출력: $MATRIX_ROOT/characters/*.png (기본 /tmp/spriteengine_matrix)
 """
+import argparse
 import base64
 import json
 import os
@@ -84,24 +85,38 @@ def generate(name, desc):
     print(f"{name}: {len(png)} bytes -> {target}", flush=True)
 
 
-failures = {}
-for name, desc in CHARACTERS.items():
-    if (OUT / f"{name}.png").exists():
-        print(f"{name}: exists, skipping", flush=True)
-        continue
-    for attempt in (1, 2):
-        try:
-            generate(name, desc)
-            break
-        except Exception as exc:  # noqa: BLE001
-            print(f"{name}: attempt {attempt} failed: {exc}", flush=True)
-            failures[name] = str(exc)
-            time.sleep(5)
-    else:
-        continue
-    failures.pop(name, None)
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--set", choices=["1", "2"], default=os.environ.get("CHARACTER_SET", "1"))
+    ap.add_argument("--only", help="쉼표로 구분한 캐릭터 이름만 생성 (예: samurai,boxer)")
+    args = ap.parse_args()
+    pool = CHARACTERS if args.set == "1" else CHARACTERS_SET2
+    if args.only:
+        wanted = [n.strip() for n in args.only.split(",") if n.strip()]
+        pool = {n: pool[n] for n in wanted if n in pool}
 
-if failures:
-    print("FAILED:", json.dumps(failures, indent=2))
-    sys.exit(1)
-print("ALL_CHARACTERS_OK")
+    failures = {}
+    for name, desc in pool.items():
+        if (OUT / f"{name}.png").exists():
+            print(f"{name}: exists, skipping", flush=True)
+            continue
+        for attempt in (1, 2):
+            try:
+                generate(name, desc)
+                break
+            except Exception as exc:  # noqa: BLE001
+                print(f"{name}: attempt {attempt} failed: {exc}", flush=True)
+                failures[name] = str(exc)
+                time.sleep(5)
+        else:
+            continue
+        failures.pop(name, None)
+
+    if failures:
+        print("FAILED:", json.dumps(failures, indent=2))
+        sys.exit(1)
+    print("ALL_CHARACTERS_OK")
+
+
+if __name__ == "__main__":
+    main()
