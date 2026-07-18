@@ -1,0 +1,17 @@
+- generic [ref=f10e3]:
+  - generic [ref=f10e6]:
+    - heading "사이트에 연결할 수 없음" [level=1] [ref=f10e7]
+    - paragraph [ref=f10e8]:
+      - strong [ref=f10e9]: 127.0.0.1
+      - text: 에서 연결을 거부했습니다.
+    - generic [ref=f10e10]:
+      - paragraph [ref=f10e11]: 다음 방법을 시도해 보세요.
+      - list [ref=f10e12]:
+        - listitem [ref=f10e13]: 연결 확인
+        - listitem [ref=f10e14]:
+          - link "프록시 및 방화벽 확인" [ref=f10e15] [cursor=pointer]:
+            - /url: "#buttons"
+    - generic [ref=f10e16]: ERR_CONNECTION_REFUSED
+  - generic [ref=f10e17]:
+    - button "새로고침" [ref=f10e19] [cursor=pointer]
+    - button "세부정보" [ref=f10e20] [cursor=pointer]

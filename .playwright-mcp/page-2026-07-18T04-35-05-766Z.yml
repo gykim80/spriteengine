@@ -1,0 +1,56 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: SPRITEENGINE
+      - text: AI CHARACTER STUDIO
+    - navigation [ref=e12]:
+      - generic [ref=e13]: MENU
+      - button "Projects 생성 · 관리" [ref=e14] [cursor=pointer]:
+        - generic [ref=e20]:
+          - generic [ref=e21]: Projects
+          - generic [ref=e22]: 생성 · 관리
+      - button "Studio 프로젝트 선택 필요" [ref=e23] [cursor=pointer]:
+        - generic [ref=e29]:
+          - generic [ref=e30]: Studio
+          - generic [ref=e31]: 프로젝트 선택 필요
+      - button "Library 로컬 GLB · 에셋 소스" [ref=e32] [cursor=pointer]:
+        - generic [ref=e35]:
+          - generic [ref=e36]: Library
+          - generic [ref=e37]: 로컬 GLB · 에셋 소스
+    - generic [ref=e38]:
+      - button "Settings" [ref=e39] [cursor=pointer]
+      - generic [ref=e43]:
+        - generic [ref=e44]: RunPod configured
+        - generic [ref=e46]: GLTF runtime · Ready
+  - main [ref=e47]:
+    - generic [ref=e48]:
+      - generic [ref=e49]:
+        - text: WORKSPACE / PROJECTS
+        - heading "Turn one image into a living character." [level=1] [ref=e50]
+      - button "Import character" [ref=e52] [cursor=pointer]
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - text: ALL PROJECTS
+          - generic [ref=e57]: 2 character projects
+        - generic [ref=e58]: 이미지 한 장으로 프로젝트를 생성하고, 카드에서 관리하고, Studio에서 편집합니다.
+      - generic [ref=e59]:
+        - button "Import reference image PNG, JPG, WEBP · immutable workspace copy" [ref=e60] [cursor=pointer]:
+          - generic [ref=e67]: Import reference image
+          - generic [ref=e68]: PNG, JPG, WEBP · immutable workspace copy
+        - generic [ref=e69]:
+          - button "Open r2 in Studio" [ref=e70] [cursor=pointer]:
+            - generic [ref=e71]: Processing
+          - generic [ref=e75]:
+            - generic [ref=e76]:
+              - generic "r2" [ref=e77]
+              - generic [ref=e78]: 16% · 1 artifacts · 2026. 7. 18.
+            - button "Project options" [ref=e79] [cursor=pointer]
+        - generic [ref=e84]:
+          - button "Open hero in Studio" [ref=e85] [cursor=pointer]:
+            - generic [ref=e86]: Failed
+          - generic [ref=e90]:
+            - generic [ref=e91]:
+              - generic "hero" [ref=e92]
+              - generic [ref=e93]: 16% · 1 artifacts · 2026. 7. 18.
+            - button "Project options" [ref=e94] [cursor=pointer]

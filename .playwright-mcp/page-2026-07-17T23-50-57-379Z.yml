@@ -1,0 +1,112 @@
+- generic [ref=f11e3]:
+  - complementary [ref=f11e4]:
+    - generic [ref=f11e10]:
+      - generic [ref=f11e11]: SPRITEENGINE
+      - text: AI CHARACTER STUDIO
+    - navigation [ref=f11e12]:
+      - generic [ref=f11e13]: MENU
+      - button "Create" [ref=f11e14] [cursor=pointer]
+      - button "Projects" [ref=f11e19] [cursor=pointer]
+      - button "Motion Lab" [ref=f11e22] [cursor=pointer]
+      - button "Export" [ref=f11e25] [cursor=pointer]
+    - generic [ref=f11e29]:
+      - button "Settings" [ref=f11e30] [cursor=pointer]
+      - generic [ref=f11e34]:
+        - generic [ref=f11e35]: Local compute
+        - generic [ref=f11e37]: GLTF runtime · Ready
+  - main [ref=f11e38]:
+    - generic [ref=f11e39]:
+      - generic [ref=f11e40]:
+        - generic [ref=f11e41]: WORKSPACE / MOTION LAB
+        - heading "Motion Lab — preview real skeletal clips." [level=1] [ref=f11e42]
+      - generic [ref=f11e43]:
+        - button "Open-source library" [ref=f11e44] [cursor=pointer]
+        - button "Load GLB" [ref=f11e49] [cursor=pointer]
+        - button "Import character" [ref=f11e53] [cursor=pointer]
+    - generic [ref=f11e55]:
+      - button "Bundled skinned human and authored motion are playing. ×" [ref=f11e56] [cursor=pointer]:
+        - text: Bundled skinned human and authored motion are playing.
+        - generic [ref=f11e57]: ×
+      - generic [ref=f11e58]:
+        - generic [ref=f11e59]:
+          - button "Clips" [ref=f11e60] [cursor=pointer]
+          - button "Timeline" [ref=f11e61] [cursor=pointer]
+          - button "Libraries" [ref=f11e62] [cursor=pointer]
+        - generic [ref=f11e63]: Loading model runtime
+      - generic [ref=f11e65]:
+        - generic [ref=f11e66]:
+          - generic [ref=f11e67]:
+            - generic [ref=f11e68]: SKINNED MESH · DRAG TO ORBIT · SCROLL TO ZOOM
+            - generic [ref=f11e69]:
+              - button "Show skeleton" [ref=f11e70] [cursor=pointer]
+              - button "Lit PBR" [ref=f11e71] [cursor=pointer]
+          - generic [ref=f11e74]:
+            - text: YX
+            - emphasis [ref=f11e75]: Z
+          - generic [ref=f11e80]:
+            - generic [ref=f11e81]: Loading asset…
+            - generic [ref=f11e82]: 0 embedded animation clips · crossfade
+        - generic [ref=f11e83]:
+          - generic [ref=f11e84]:
+            - generic [ref=f11e85]:
+              - text: MOTION CLIPS
+              - heading "Animation browser" [level=2] [ref=f11e86]
+            - generic [ref=f11e87]: 60 FPS
+          - generic [ref=f11e88]:
+            - button "Idle Loop · locomotion PLAY" [ref=f11e89] [cursor=pointer]:
+              - generic [ref=f11e93]:
+                - generic [ref=f11e94]: Idle
+                - generic [ref=f11e95]: Loop · locomotion
+              - emphasis [ref=f11e96]: PLAY
+            - button "Walk Embedded skeletal clip PLAY" [ref=f11e97] [cursor=pointer]:
+              - generic [ref=f11e101]:
+                - generic [ref=f11e102]: Walk
+                - generic [ref=f11e103]: Embedded skeletal clip
+              - emphasis [ref=f11e104]: PLAY
+            - button "Run Embedded skeletal clip PLAY" [ref=f11e105] [cursor=pointer]:
+              - generic [ref=f11e109]:
+                - generic [ref=f11e110]: Run
+                - generic [ref=f11e111]: Embedded skeletal clip
+              - emphasis [ref=f11e112]: PLAY
+          - generic [ref=f11e113]:
+            - generic [ref=f11e114]:
+              - text: Playback speed
+              - generic [ref=f11e115]: 1.00×
+            - slider [ref=f11e116] [cursor=pointer]: "1"
+            - generic [ref=f11e117]:
+              - checkbox "Skeleton overlay" [ref=f11e118]
+              - text: Skeleton overlay
+            - button "Import GLB with animations" [ref=f11e119] [cursor=pointer]
+      - generic [ref=f11e123]:
+        - button [ref=f11e124] [cursor=pointer]
+        - button [ref=f11e128] [cursor=pointer]
+        - generic [ref=f11e132]: 0.00s
+        - slider [ref=f11e133] [cursor=pointer]: "0"
+        - generic [ref=f11e134]: 0.00s
+      - generic [ref=f11e135]:
+        - generic [ref=f11e136]:
+          - generic [ref=f11e137]:
+            - text: LICENSE-AWARE ASSET SOURCES
+            - generic [ref=f11e138]: Characters & motion libraries
+          - generic [ref=f11e139]: Assets are opened at source; verify each creator license before commercial use.
+        - generic [ref=f11e140]:
+          - button "Itch.io 3D Characters Creator-licensed character packs" [ref=f11e141] [cursor=pointer]:
+            - generic [ref=f11e144]:
+              - generic [ref=f11e145]: Itch.io 3D Characters
+              - generic [ref=f11e146]: Creator-licensed character packs
+          - button "Itch.io Animations Rigged motion asset packs" [ref=f11e149] [cursor=pointer]:
+            - generic [ref=f11e152]:
+              - generic [ref=f11e153]: Itch.io Animations
+              - generic [ref=f11e154]: Rigged motion asset packs
+          - button "Quaternius CC0 animated character packs" [ref=f11e157] [cursor=pointer]:
+            - generic [ref=f11e160]:
+              - generic [ref=f11e161]: Quaternius
+              - generic [ref=f11e162]: CC0 animated character packs
+          - button "Mixamo Auto-rig and motion library" [ref=f11e165] [cursor=pointer]:
+            - generic [ref=f11e168]:
+              - generic [ref=f11e169]: Mixamo
+              - generic [ref=f11e170]: Auto-rig and motion library
+          - button "ActorCore Free Mocap motion collection" [ref=f11e173] [cursor=pointer]:
+            - generic [ref=f11e176]:
+              - generic [ref=f11e177]: ActorCore Free
+              - generic [ref=f11e178]: Mocap motion collection

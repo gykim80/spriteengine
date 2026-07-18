@@ -1,0 +1,96 @@
+- generic [ref=f3e3]:
+  - complementary [ref=f3e4]:
+    - generic [ref=f3e10]:
+      - generic [ref=f3e11]: SPRITEENGINE
+      - text: AI CHARACTER STUDIO
+    - navigation [ref=f3e12]:
+      - generic [ref=f3e13]: MENU
+      - button "Projects 생성 · 관리" [ref=f3e14] [cursor=pointer]:
+        - generic [ref=f3e20]:
+          - generic [ref=f3e21]: Projects
+          - generic [ref=f3e22]: 생성 · 관리
+      - button "Studio r2" [ref=f3e107] [cursor=pointer]:
+        - generic [ref=f3e29]:
+          - generic [ref=f3e30]: Studio
+          - generic [ref=f3e31]: r2
+      - button "Library 로컬 GLB · 에셋 소스" [ref=f3e32] [cursor=pointer]:
+        - generic [ref=f3e35]:
+          - generic [ref=f3e36]: Library
+          - generic [ref=f3e37]: 로컬 GLB · 에셋 소스
+    - generic [ref=f3e38]:
+      - button "Settings" [ref=f3e39] [cursor=pointer]
+      - generic [ref=f3e43]:
+        - generic [ref=f3e44]: RunPod configured
+        - generic [ref=f3e46]: GLTF runtime · Ready
+  - main [ref=f3e47]:
+    - generic [ref=f3e48]:
+      - generic [ref=f3e49]:
+        - text: WORKSPACE / STUDIO
+        - heading "r2" [level=1] [ref=f3e108]
+      - generic [ref=f3e51]:
+        - button "Open workspace" [ref=f3e109] [cursor=pointer]
+        - button "Export GLB" [ref=f3e112] [cursor=pointer]
+        - button "Import character" [ref=f3e52] [cursor=pointer]
+    - generic [ref=f3e116]:
+      - generic [ref=f3e117]:
+        - tablist [ref=f3e118]:
+          - tab "Pipeline" [selected] [ref=f3e119] [cursor=pointer]
+          - tab "Motion" [ref=f3e120] [cursor=pointer]
+          - tab "Export" [ref=f3e121] [cursor=pointer]
+        - generic [ref=f3e122]: FAILED · 16%20260718-083159-428000
+      - generic [ref=f3e124]:
+        - generic [ref=f3e126]:
+          - img "Reference" [ref=f3e127]
+          - generic [ref=f3e128]: Reference image
+          - generic [ref=f3e129]: Run pipeline을 실행하면 3D 아티팩트가 여기에 표시됩니다.
+        - generic [ref=f3e130]:
+          - generic [ref=f3e132]:
+            - text: PIPELINE
+            - heading "r2" [level=2] [ref=f3e133]
+          - generic [ref=f3e134]:
+            - text: SOURCE VERIFIED
+            - generic [ref=f3e135]: e3e06deb2c02
+          - generic [ref=f3e136]:
+            - generic [ref=f3e137]:
+              - generic [ref=f3e138]: Pipeline progress
+              - generic [ref=f3e139]: 16%
+            - emphasis [ref=f3e141]
+          - generic [ref=f3e142]:
+            - generic [ref=f3e143]:
+              - generic [ref=f3e144]: ✓
+              - generic [ref=f3e145]:
+                - generic [ref=f3e146]: Image cleanup
+                - generic [ref=f3e147]: Completed · local-baseline
+              - button "Reset Image cleanup" [ref=f3e148] [cursor=pointer]
+            - generic [ref=f3e152]:
+              - generic [ref=f3e153]: "2"
+              - generic [ref=f3e154]:
+                - generic [ref=f3e155]: 3D reconstruction
+                - generic [ref=f3e156]: Multi-view diffusion → textured mesh
+            - generic [ref=f3e159]:
+              - generic [ref=f3e160]: "3"
+              - generic [ref=f3e161]:
+                - generic [ref=f3e162]: Mesh cleanup
+                - generic [ref=f3e163]: Retopology, UV & material pass
+            - generic [ref=f3e166]:
+              - generic [ref=f3e167]: "4"
+              - generic [ref=f3e168]:
+                - generic [ref=f3e169]: Auto rig
+                - generic [ref=f3e170]: Skeleton, skin weights & deformation check
+            - generic [ref=f3e173]:
+              - generic [ref=f3e174]: "5"
+              - generic [ref=f3e175]:
+                - generic [ref=f3e176]: Animation
+                - generic [ref=f3e177]: Motion generation and retargeting
+            - generic [ref=f3e180]:
+              - generic [ref=f3e181]: "6"
+              - generic [ref=f3e182]:
+                - generic [ref=f3e183]: Export
+                - generic [ref=f3e184]: GLB / FBX / USDZ package
+          - button "Run next stage" [ref=f3e187] [cursor=pointer]
+          - button "Run full pipeline" [ref=f3e190] [cursor=pointer]
+          - paragraph [ref=f3e193]: Every stage is non-destructive · 완료 단계는 ↺ 로 재실행
+      - group [ref=f3e197]:
+        - generic [ref=f3e198] [cursor=pointer]:
+          - text: ▸ Pipeline logs
+          - emphasis [ref=f3e199]: "4"

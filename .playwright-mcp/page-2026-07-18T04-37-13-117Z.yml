@@ -1,0 +1,57 @@
+- generic [ref=f3e3]:
+  - complementary [ref=f3e4]:
+    - generic [ref=f3e10]:
+      - generic [ref=f3e11]: SPRITEENGINE
+      - text: AI CHARACTER STUDIO
+    - navigation [ref=f3e12]:
+      - generic [ref=f3e13]: MENU
+      - button "Projects 생성 · 관리" [ref=f3e14] [cursor=pointer]:
+        - generic [ref=f3e20]:
+          - generic [ref=f3e21]: Projects
+          - generic [ref=f3e22]: 생성 · 관리
+      - button "Studio r2" [ref=f3e107] [cursor=pointer]:
+        - generic [ref=f3e29]:
+          - generic [ref=f3e30]: Studio
+          - generic [ref=f3e31]: r2
+      - button "Library 로컬 GLB · 에셋 소스" [ref=f3e32] [cursor=pointer]:
+        - generic [ref=f3e35]:
+          - generic [ref=f3e36]: Library
+          - generic [ref=f3e37]: 로컬 GLB · 에셋 소스
+    - generic [ref=f3e38]:
+      - button "Settings" [ref=f3e39] [cursor=pointer]
+      - generic [ref=f3e43]:
+        - generic [ref=f3e44]: RunPod configured
+        - generic [ref=f3e46]: GLTF runtime · Ready
+  - main [ref=f3e47]:
+    - generic [ref=f3e48]:
+      - generic [ref=f3e49]:
+        - text: WORKSPACE / STUDIO
+        - heading "r2" [level=1] [ref=f3e108]
+      - generic [ref=f3e51]:
+        - button "Open workspace" [ref=f3e109] [cursor=pointer]
+        - button "Export GLB" [ref=f3e112] [cursor=pointer]
+        - button "Import character" [ref=f3e52] [cursor=pointer]
+    - generic [ref=f3e116]:
+      - generic [ref=f3e117]:
+        - tablist [ref=f3e118]:
+          - tab "Pipeline" [ref=f3e119] [cursor=pointer]
+          - tab "Motion" [ref=f3e120] [cursor=pointer]
+          - tab "Export" [active] [selected] [ref=f3e121] [cursor=pointer]
+        - generic [ref=f3e122]: FAILED · 16%20260718-083159-428000
+      - generic [ref=f3e200]:
+        - generic [ref=f3e201]:
+          - text: PACKAGE
+          - heading "Export character" [level=2] [ref=f3e202]
+          - paragraph [ref=f3e203]: 가장 최근 GLB 아티팩트를 검증 후 원하는 위치로 저장합니다.
+          - generic [ref=f3e204]:
+            - button "GLB artifact 없음 · pipeline 먼저 실행" [disabled] [ref=f3e205]
+            - button "FBX · Coming soon" [disabled] [ref=f3e209]
+            - button "USDZ · Coming soon" [disabled] [ref=f3e210]
+        - generic [ref=f3e211]:
+          - text: ARTIFACTS
+          - heading "Stage outputs" [level=2] [ref=f3e212]
+          - generic [ref=f3e214]:
+            - generic [ref=f3e220]:
+              - generic [ref=f3e221]: reference.png
+              - generic [ref=f3e222]: prepare · reference
+            - generic [ref=f3e223]: file
