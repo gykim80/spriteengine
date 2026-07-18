@@ -62,7 +62,8 @@ export default function PipelinePanel({job, running, workerMessage, artifactUrl,
             <div><span>PIPELINE</span><h2>{job.name}</h2></div>
           </div>
           {job.imageHash && <div className="provenance">SOURCE VERIFIED <b>{job.imageHash.slice(0, 12)}</b></div>}
-          <div className="progress">
+          <div className="progress" role="progressbar" aria-label="Pipeline progress"
+            aria-valuemin={0} aria-valuemax={100} aria-valuenow={job.progress} aria-valuetext={`${job.progress}%`}>
             <div><span>{workerMessage || 'Pipeline progress'}</span><b>{job.progress}%</b></div>
             <i><em className={running ? 'indeterminate' : ''} style={{width: `${job.progress}%`}} /></i>
           </div>

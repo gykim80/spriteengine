@@ -125,7 +125,10 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
                   {thumbs[j.id] ? <img src={thumbs[j.id]} alt="" /> : <Layers3 />}
                   <span className={`badge ${j.status}`}>{statusLabel[j.status] || j.status}</span>
                 </div>
-                <div className="project-progress"><i style={{width: `${j.progress}%`}} /></div>
+                <div className="project-progress" role="progressbar" aria-label={`${j.name} pipeline progress`}
+                  aria-valuemin={0} aria-valuemax={100} aria-valuenow={j.progress}>
+                  <i style={{width: `${j.progress}%`}} />
+                </div>
               </button>
               <div className="project-meta">
                 {renaming === j.id ? (
