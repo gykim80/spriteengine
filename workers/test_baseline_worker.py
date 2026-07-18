@@ -29,29 +29,41 @@ def make_png():
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
 
 
-def make_glb(path, with_material=False):
-    """POSITION+NORMAL만 가진 최소 사각형 GLB (Hunyuan shape-only 출력 모사)."""
+def make_glb(path, with_material=False, with_normals=True):
+    """최소 사각형 GLB. with_normals=False면 Hunyuan shape-only 출력처럼
+    POSITION+indices만 가진다 (법선은 워커가 직접 계산해야 함)."""
     positions = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
     normals = [(0, 0, 1), (0, 0, 1), (0, 0, -1), (0, 0, -1)]
     blob = bytearray()
-    for v in positions + normals:
+    for v in positions:
         blob += struct.pack("<fff", *v)
+    attributes = {"POSITION": 0}
     gltf = {
         "asset": {"version": "2.0"},
-        "buffers": [{"byteLength": len(blob)}],
-        "bufferViews": [
-            {"buffer": 0, "byteOffset": 0, "byteLength": 48},
-            {"buffer": 0, "byteOffset": 48, "byteLength": 48},
-        ],
-        "accessors": [
-            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3"},
-            {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
-        ],
-        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}}]}],
+        "buffers": [{"byteLength": 0}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 48}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3"}],
+        "meshes": [{"primitives": [{"attributes": attributes}]}],
         "nodes": [{"mesh": 0}],
         "scenes": [{"nodes": [0]}],
         "scene": 0,
     }
+    if with_normals:
+        offset = len(blob)
+        for v in normals:
+            blob += struct.pack("<fff", *v)
+        gltf["bufferViews"].append({"buffer": 0, "byteOffset": offset, "byteLength": 48})
+        gltf["accessors"].append({"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"})
+        attributes["NORMAL"] = 1
+    else:
+        # 반시계(+z를 향하는) 삼각형 두 개로 사각형 구성
+        offset = len(blob)
+        indices = (0, 1, 2, 0, 2, 3)
+        blob += struct.pack("<6H", *indices)
+        gltf["bufferViews"].append({"buffer": 0, "byteOffset": offset, "byteLength": 12})
+        gltf["accessors"].append({"bufferView": 1, "componentType": 5123, "count": 6, "type": "SCALAR"})
+        gltf["meshes"][0]["primitives"][0]["indices"] = 1
+    gltf["buffers"][0]["byteLength"] = len(blob)
     if with_material:
         gltf["materials"] = [{"name": "Authored"}]
         gltf["meshes"][0]["primitives"][0]["material"] = 0
@@ -95,6 +107,19 @@ class BakeTextureTest(unittest.TestCase):
         front, back = bin_data[base], bin_data[base + 8]
         self.assertEqual(front, 255)
         self.assertEqual(back, int(255 * 0.55))
+
+    def test_computes_normals_when_missing(self):
+        # Hunyuan shape-only 출력: POSITION+indices만 존재 → 법선 계산 후 음영
+        make_glb(self.glb, with_normals=False)
+        self.assertTrue(worker.bake_texture(self.glb, self.png, self.out))
+        gltf, bin_data = worker._read_glb(self.out)
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        self.assertIn("COLOR_0", attrs)
+        acc = gltf["accessors"][attrs["COLOR_0"]]
+        base = gltf["bufferViews"][acc["bufferView"]]["byteOffset"]
+        # 모든 정점이 +z를 향하는 평면이므로 전부 최대 밝기여야 함
+        for i in range(acc["count"]):
+            self.assertEqual(bin_data[base + i * 4], 255)
 
     def test_glb_structure_stays_valid(self):
         make_glb(self.glb)

@@ -95,6 +95,41 @@ def _read_vec3(gltf, bin_data, accessor_index, what):
     return [struct.unpack_from("<fff", bin_data, base + i * stride) for i in range(acc["count"])]
 
 
+def _read_indices(gltf, bin_data, prim):
+    if "indices" not in prim:
+        return None
+    acc = gltf["accessors"][prim["indices"]]
+    fmt = {5121: "<B", 5123: "<H", 5125: "<I"}.get(acc.get("componentType"))
+    if fmt is None or "bufferView" not in acc:
+        return None
+    view = gltf["bufferViews"][acc["bufferView"]]
+    base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    size = struct.calcsize(fmt)
+    return [struct.unpack_from(fmt, bin_data, base + i * size)[0] for i in range(acc["count"])]
+
+
+def _vertex_normals(positions, indices):
+    """indexed triangle 메시에서 면적 가중 정점 법선을 계산한다 (NORMAL 부재 시)."""
+    normals = [[0.0, 0.0, 0.0] for _ in positions]
+    for t in range(0, len(indices) - 2, 3):
+        ia, ib, ic = indices[t], indices[t + 1], indices[t + 2]
+        ax, ay, az = positions[ia]
+        e1 = (positions[ib][0] - ax, positions[ib][1] - ay, positions[ib][2] - az)
+        e2 = (positions[ic][0] - ax, positions[ic][1] - ay, positions[ic][2] - az)
+        cx = e1[1] * e2[2] - e1[2] * e2[1]
+        cy = e1[2] * e2[0] - e1[0] * e2[2]
+        cz = e1[0] * e2[1] - e1[1] * e2[0]
+        for i in (ia, ib, ic):
+            normals[i][0] += cx
+            normals[i][1] += cy
+            normals[i][2] += cz
+    out = []
+    for nx, ny, nz in normals:
+        norm = (nx * nx + ny * ny + nz * nz) ** 0.5 or 1.0
+        out.append((nx / norm, ny / norm, nz / norm))
+    return out
+
+
 def _append_view(gltf, bin_data, blob):
     while len(bin_data) % 4:
         bin_data.append(0)
@@ -153,10 +188,18 @@ def bake_texture(glb_path, image_path, output_path):
             gltf["accessors"].append({"bufferView": view, "componentType": 5126,
                                       "count": len(positions), "type": "VEC2"})
             attrs["TEXCOORD_0"] = len(gltf["accessors"]) - 1
-            if "NORMAL" in attrs and "COLOR_0" not in attrs:
+            normals = None
+            if "COLOR_0" not in attrs:
+                if "NORMAL" in attrs:
+                    normals = _read_vec3(gltf, bin_data, attrs["NORMAL"], "NORMAL")
+                else:
+                    # Hunyuan shape-only 출력은 NORMAL도 없으므로 indices에서 계산
+                    indices = _read_indices(gltf, bin_data, prim)
+                    if indices:
+                        normals = _vertex_normals(positions, indices)
+            if normals:
                 # 정면 투영은 뒷면에 앞면 텍스처가 미러링되므로, 법선 z가
                 # 뒤를 향할수록 정점 컬러(COLOR_0)로 어둡게 해 깊이감을 준다.
-                normals = _read_vec3(gltf, bin_data, attrs["NORMAL"], "NORMAL")
                 colors = bytearray()
                 for _, _, nz in normals:
                     shade = int(255 * (0.55 + 0.45 * max(nz, 0.0)))
