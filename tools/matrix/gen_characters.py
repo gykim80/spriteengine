@@ -34,6 +34,20 @@ def load_key():
 
 key = load_key()
 
+# 세트 2: 앱 프로덕션 경로 검증용 신규 10종 (--set 2 또는 CHARACTER_SET=2)
+CHARACTERS_SET2 = {
+    "samurai":    "a samurai warrior in dark red lacquered armor with a katana sheathed at the hip",
+    "boxer":      "a muscular boxer wearing red gloves, blue shorts and boxing shoes",
+    "ballerina":  "a ballerina in a light pink tutu and pointe shoes with hair in a bun",
+    "zombie":     "a cartoonish zombie office worker with torn shirt and green skin",
+    "superhero":  "a superhero in a blue suit with a yellow cape and emblem on the chest",
+    "detective":  "a detective in a beige trench coat and fedora hat holding nothing",
+    "scientist":  "a scientist in a white lab coat with safety goggles on the forehead",
+    "farmer":     "a friendly farmer in denim overalls, plaid shirt and straw hat",
+    "idol":       "a k-pop idol dancer in a stylish silver stage outfit",
+    "barbarian":  "a barbarian warrior with a fur loincloth, leather straps and a big axe on the back",
+}
+
 CHARACTERS = {
     "knight":     "a fantasy knight in silver plate armor with a blue cape",
     "wizard":     "an old wizard with a long white beard, purple robe and pointed hat",

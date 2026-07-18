@@ -140,6 +140,87 @@ def _append_view(gltf, bin_data, blob):
     return len(gltf["bufferViews"]) - 1
 
 
+def _quat_rotate_vec3(q, v):
+    """단위 쿼터니언 q(xyzw)로 벡터 v를 회전한다 (v' = q ⊗ v ⊗ q⁻¹의 최적화형)."""
+    qx, qy, qz, qw = q
+    vx, vy, vz = v
+    tx = 2.0 * (qy * vz - qz * vy)
+    ty = 2.0 * (qz * vx - qx * vz)
+    tz = 2.0 * (qx * vy - qy * vx)
+    return (
+        vx + qw * tx + (qy * tz - qz * ty),
+        vy + qw * ty + (qz * tx - qx * tz),
+        vz + qw * tz + (qx * ty - qy * tx),
+    )
+
+
+def _quat_is_identity(q, eps=1e-6):
+    return abs(q[0]) < eps and abs(q[1]) < eps and abs(q[2]) < eps and abs(q[3] - 1.0) < eps
+
+
+def _bake_mesh_node_transform(gltf, bin_data):
+    """메시가 달린 노드에 걸린 TRS를 버텍스 데이터에 직접 구워 넣고 노드를 항등으로 리셋한다.
+
+    glTF 스펙상 스킨(JOINTS_0/WEIGHTS_0)이 붙은 메시 노드는 자신의 로컬
+    트랜스폼이 렌더러에서 완전히 무시된다 — 최종 버텍스 위치는 오직 조인트
+    트랜스폼(및 inverseBindMatrices)으로만 결정된다
+    (https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_020_Skins.html).
+
+    Hunyuan3D-2.1 복원 출력은 원본 메시가 로컬 Z축이 키(예: 1.99m), Y축이
+    깊이(예: 0.54m)로 저장되고, 노드 회전(보통 X축 ±90°)으로 뷰어에서 정상
+    직립으로 보이도록 보정한다. 이 회전은 스킨이 없는 동안(reconstruct/retopo
+    단계)에는 정상 적용되지만, auto_rig()가 스킨을 추가하는 순간부터 무시되어
+    캐릭터가 원본 "누운" 자세로 렌더링된다. 게다가 auto_rig()의 관절 배치도
+    로컬 Y축을 키로 잘못 가정해 실제 몸 형태와 무관한 위치에 스켈레톤이
+    눌려 박힌다. 스킨을 추가하기 전에 이 노드 트랜스폼을 버텍스 좌표에
+    직접 구워 넣어, 스킨 유무와 무관하게 항상 올바른 직립 자세가 되도록
+    정규화한다. 이미 항등 트랜스폼이면 아무 것도 하지 않는다(멱등).
+    """
+    for node in gltf.get("nodes", []):
+        if "mesh" not in node:
+            continue
+        rot = node.get("rotation") or [0.0, 0.0, 0.0, 1.0]
+        trans = node.get("translation") or [0.0, 0.0, 0.0]
+        scale = node.get("scale") or [1.0, 1.0, 1.0]
+        if _quat_is_identity(rot) and trans == [0.0, 0.0, 0.0] and scale == [1.0, 1.0, 1.0]:
+            continue
+        mesh = gltf["meshes"][node["mesh"]]
+        for prim in mesh.get("primitives", []):
+            attrs = prim.get("attributes", {})
+            for key in ("POSITION", "NORMAL"):
+                aid = attrs.get(key)
+                if aid is None:
+                    continue
+                acc = gltf["accessors"][aid]
+                view = gltf["bufferViews"][acc["bufferView"]]
+                stride = view.get("byteStride", 12)
+                base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+                is_position = key == "POSITION"
+                new_min = [math.inf] * 3
+                new_max = [-math.inf] * 3
+                for i in range(acc["count"]):
+                    off = base + i * stride
+                    x, y, z = struct.unpack_from("<fff", bin_data, off)
+                    if is_position:
+                        # 노드 로컬 행렬은 T * R * S 순서로 합성된다.
+                        sx, sy, sz = x * scale[0], y * scale[1], z * scale[2]
+                        rx, ry, rz = _quat_rotate_vec3(rot, (sx, sy, sz))
+                        rx, ry, rz = rx + trans[0], ry + trans[1], rz + trans[2]
+                    else:
+                        # 법선은 이동/스케일 없이 회전만 반영한다.
+                        rx, ry, rz = _quat_rotate_vec3(rot, (x, y, z))
+                    struct.pack_into("<fff", bin_data, off, rx, ry, rz)
+                    if is_position:
+                        for k, val in enumerate((rx, ry, rz)):
+                            new_min[k] = min(new_min[k], val)
+                            new_max[k] = max(new_max[k], val)
+                if is_position:
+                    acc["min"], acc["max"] = new_min, new_max
+        node["rotation"] = [0.0, 0.0, 0.0, 1.0]
+        node["translation"] = [0.0, 0.0, 0.0]
+        node["scale"] = [1.0, 1.0, 1.0]
+
+
 def auto_rig(glb_path, output_path):
     """Static mesh에 바운딩박스 기반 휴머노이드 skeleton을 추가한다.
 
@@ -152,6 +233,10 @@ def auto_rig(glb_path, output_path):
     buffers = gltf.get("buffers") or []
     if not buffers or "uri" in buffers[0]:
         return False  # 외부 버퍼
+
+    # 스킨을 추가하면 메시 노드 자신의 TRS는 렌더러에서 무시되므로, 관절
+    # 배치를 계산하기 전에 노드 트랜스폼을 버텍스에 구워 넣어 정규화한다.
+    _bake_mesh_node_transform(gltf, bin_data)
 
     # 1. 전체 메시 AABB -------------------------------------------------
     all_pos = []
@@ -452,6 +537,13 @@ def bake_texture(glb_path, image_path, output_path):
     buffers = gltf.get("buffers") or []
     if not buffers or "uri" in buffers[0]:
         return False  # 외부 버퍼 GLB는 baseline 범위 밖
+
+    # 정면 투영 UV는 로컬 X=좌우, Y=수직(키)을 가정한다. Hunyuan3D-2.1 출력처럼
+    # 실제 키가 로컬 Z축이고 노드 회전으로 보정되는 경우, 투영 전에 회전을
+    # 버텍스에 구워 넣어 두 축 가정이 실제로 맞도록 정규화한다 (자세한 설명은
+    # _bake_mesh_node_transform 참고).
+    _bake_mesh_node_transform(gltf, bin_data)
+
     with open(image_path, "rb") as f:
         image_bytes = f.read()
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):

@@ -16,7 +16,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/astronaut/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/astronaut/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "chef": {
     "animations": 10,
@@ -35,7 +37,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/chef/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/chef/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "cyberpunk": {
     "animations": 10,
@@ -54,7 +58,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/cyberpunk/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/cyberpunk/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "firefighter": {
     "animations": 10,
@@ -73,7 +79,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/firefighter/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/firefighter/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "knight": {
     "animations": 10,
@@ -92,7 +100,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/knight/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/knight/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "ninja": {
     "animations": 10,
@@ -111,7 +121,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/ninja/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/ninja/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "pirate": {
     "animations": 10,
@@ -130,7 +142,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/pirate/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/pirate/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "robot": {
     "animations": 10,
@@ -149,7 +163,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/robot/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/robot/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "viking": {
     "animations": 10,
@@ -168,7 +184,9 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/viking/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/viking/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   },
   "wizard": {
     "animations": 10,
@@ -187,6 +205,8 @@
       "spin",
       "flykick"
     ],
-    "path": "/tmp/spriteengine_matrix/ws/wizard/motion/character-animated.glb"
+    "path": "/tmp/spriteengine_matrix/ws/wizard/motion/character-animated.glb",
+    "render_valid": true,
+    "render_issues": []
   }
 }

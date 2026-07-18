@@ -461,8 +461,8 @@ func (a *App) RunPodGenerateMotion(jobID string, prompts []MotionPrompt) (Motion
 	if len(cleaned) == 0 {
 		return MotionGenerateResult{}, errors.New("모션 프롬프트 텍스트를 입력해 주세요")
 	}
-	if len(cleaned) > 20 {
-		return MotionGenerateResult{}, errors.New("프롬프트는 한 번에 최대 20개까지 가능합니다")
+	if len(cleaned) > 60 {
+		return MotionGenerateResult{}, errors.New("프롬프트는 한 번에 최대 60개까지 가능합니다")
 	}
 	client, err := a.runPodClient()
 	if err != nil {
@@ -498,38 +498,58 @@ func (a *App) RunPodGenerateMotion(jobID string, prompts []MotionPrompt) (Motion
 		return MotionGenerateResult{}, errors.New("리깅된 GLB가 없습니다 — 파이프라인을 rig 단계까지 먼저 실행해 주세요")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
-	payload := map[string]any{"input": map[string]any{
-		"task": "motion", "prompts": cleaned, "seed": 42, "cfg_scale": 5.0,
-	}}
-	response, err := client.runPodSync(ctx, payload)
+	// RunPod handler는 job당 최대 20개 프롬프트만 받으므로, 그 이상은 균등한
+	// 배치로 나눠 순차 실행 후 병합한다 (예: 30개 → 15+15). 순차인 이유는
+	// 서버리스 워커 수가 제한적이고, 배치별 콜드스타트를 피하기 위해서다.
+	merged := hyMotionOutput{Errors: map[string]string{}}
+	batches := chunkMotionPrompts(cleaned, 20)
+	for bi, batch := range batches {
+		out, batchErr := func() (hyMotionOutput, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+			defer cancel()
+			payload := map[string]any{"input": map[string]any{
+				"task": "motion", "prompts": batch, "seed": 42, "cfg_scale": 5.0,
+			}}
+			response, err := client.runPodSync(ctx, payload)
+			if err != nil {
+				return hyMotionOutput{}, err
+			}
+			var out hyMotionOutput
+			if len(response.Output) == 0 || json.Unmarshal(response.Output, &out) != nil {
+				return hyMotionOutput{}, errors.New("RunPod motion 응답을 해석할 수 없습니다")
+			}
+			if out.Error != "" {
+				return hyMotionOutput{}, fmt.Errorf("RunPod motion 생성 실패: %s", out.Error)
+			}
+			return out, nil
+		}()
+		if batchErr != nil {
+			if len(batches) > 1 {
+				return MotionGenerateResult{}, fmt.Errorf("모션 배치 %d/%d: %w", bi+1, len(batches), batchErr)
+			}
+			return MotionGenerateResult{}, batchErr
+		}
+		if out.Model != "" {
+			merged.Model = out.Model
+		}
+		merged.Motions = append(merged.Motions, out.Motions...)
+		for k, v := range out.Errors {
+			merged.Errors[k] = v
+		}
+	}
+	if len(merged.Motions) == 0 {
+		return MotionGenerateResult{}, errors.New("RunPod이 모션을 생성하지 못했습니다")
+	}
+	mergedJSON, err := json.Marshal(merged)
 	if err != nil {
 		return MotionGenerateResult{}, err
-	}
-	var out struct {
-		Model   string            `json:"model"`
-		Error   string            `json:"error"`
-		Errors  map[string]string `json:"errors"`
-		Motions []struct {
-			ID string `json:"id"`
-		} `json:"motions"`
-	}
-	if len(response.Output) == 0 || json.Unmarshal(response.Output, &out) != nil {
-		return MotionGenerateResult{}, errors.New("RunPod motion 응답을 해석할 수 없습니다")
-	}
-	if out.Error != "" {
-		return MotionGenerateResult{}, fmt.Errorf("RunPod motion 생성 실패: %s", out.Error)
-	}
-	if len(out.Motions) == 0 {
-		return MotionGenerateResult{}, errors.New("RunPod이 모션을 생성하지 못했습니다")
 	}
 	motionDir := filepath.Join(workspace, "motion")
 	if err := os.MkdirAll(motionDir, 0755); err != nil {
 		return MotionGenerateResult{}, err
 	}
 	motionJSON := filepath.Join(motionDir, "hy_motion.json")
-	if err := os.WriteFile(motionJSON, response.Output, 0644); err != nil {
+	if err := os.WriteFile(motionJSON, mergedJSON, 0644); err != nil {
 		return MotionGenerateResult{}, err
 	}
 
@@ -546,14 +566,44 @@ func (a *App) RunPodGenerateMotion(jobID string, prompts []MotionPrompt) (Motion
 		if a.jobs[i].ID == jobID {
 			a.jobs[i].Artifacts = append(a.jobs[i].Artifacts, artifact)
 			a.jobs[i].Logs = append(a.jobs[i].Logs, LogEntry{time.Now().Format(time.RFC3339), "motion", "info",
-				fmt.Sprintf("HY-Motion: %d개 클립을 GLB 애니메이션으로 베이킹 (%s)", clips, out.Model)})
+				fmt.Sprintf("HY-Motion: %d개 클립을 GLB 애니메이션으로 베이킹 (%s)", clips, merged.Model)})
 			a.save()
 			a.emitJobUpdate(a.jobs[i])
 			break
 		}
 	}
 	a.mu.Unlock()
-	return MotionGenerateResult{Path: artifact.Path, Clips: clips, Model: out.Model, Errors: out.Errors}, nil
+	return MotionGenerateResult{Path: artifact.Path, Clips: clips, Model: merged.Model, Errors: merged.Errors}, nil
+}
+
+// hyMotionOutput은 RunPod motion job 하나의 출력이다. Motions를 RawMessage로
+// 보존해 배치 병합 시 프레임 데이터를 재해석 없이 그대로 이어 붙인다.
+type hyMotionOutput struct {
+	Model   string            `json:"model"`
+	Error   string            `json:"error,omitempty"`
+	Errors  map[string]string `json:"errors"`
+	Motions []json.RawMessage `json:"motions"`
+}
+
+// chunkMotionPrompts는 프롬프트를 max 이하의 균등한 배치로 나눈다
+// (예: 30개/max20 → 15+15, 45개 → 15+15+15). 마지막 배치만 작아지는
+// 단순 분할보다 job별 GPU 시간이 고르게 분산된다.
+func chunkMotionPrompts(prompts []MotionPrompt, max int) [][]MotionPrompt {
+	n := len(prompts)
+	if n == 0 {
+		return nil
+	}
+	count := (n + max - 1) / max
+	size := (n + count - 1) / count
+	out := make([][]MotionPrompt, 0, count)
+	for start := 0; start < n; start += size {
+		end := start + size
+		if end > n {
+			end = n
+		}
+		out = append(out, prompts[start:end])
+	}
+	return out
 }
 
 // bakeMotionGLB는 baseline worker의 motion 단계를 서브프로세스로 실행해

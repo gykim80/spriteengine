@@ -255,6 +255,102 @@ class AutoRigTest(unittest.TestCase):
                 self.assertEqual(jname, "Head", f"vertex at y={y:.2f} should be Head, got {jname}")
 
 
+Q_NEG90X = [-0.7071067811865475, 0.0, 0.0, 0.7071067811865476]  # X축 -90°: 로컬 Z-up → Y-up
+
+
+def make_rotated_static_glb(path, rotation=Q_NEG90X):
+    """Hunyuan3D-2.1 출력 재현: 로컬 Z가 키(1.8m), Y는 깊이(0.6m)이고,
+    노드 회전으로 뷰어에서 Y-up 직립으로 보정되는 GLB (버그 회귀 테스트용)."""
+    positions = [(-0.3, -0.3, 0.0), (0.3, -0.3, 0.0), (0.3, -0.3, 1.8), (-0.3, -0.3, 1.8),
+                 (-0.3,  0.3, 0.0), (0.3,  0.3, 0.0), (0.3,  0.3, 1.8), (-0.3,  0.3, 1.8)]
+    faces = [0,1,2, 0,2,3, 4,5,6, 4,6,7, 0,4,7, 0,7,3, 1,5,6, 1,6,2, 0,1,5, 0,5,4, 3,2,6, 3,6,7]
+    buf = bytearray()
+    for v in positions:
+        buf += struct.pack("<fff", *v)
+    idx_off = len(buf)
+    for i in faces:
+        buf += struct.pack("<H", i)
+    gltf = {
+        "asset": {"version": "2.0"}, "scene": 0,
+        "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0, "rotation": list(rotation)}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+        "buffers": [{"byteLength": len(buf)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": idx_off},
+            {"buffer": 0, "byteOffset": idx_off, "byteLength": len(buf) - idx_off},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 8, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5123, "count": len(faces), "type": "SCALAR"},
+        ],
+    }
+    worker._write_glb(gltf, buf, path)
+
+
+class NodeTransformBakeTest(unittest.TestCase):
+    """스킨을 추가하면 메시 노드 자신의 트랜스폼이 렌더러에서 무시되어(glTF 스펙),
+    Hunyuan3D-2.1 출력이 "누워서" 리깅되던 버그의 회귀 테스트."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-nodebake-")
+        self.addCleanup(self.tmp.cleanup)
+        self.glb = os.path.join(self.tmp.name, "rotated.glb")
+        self.out = os.path.join(self.tmp.name, "rigged.glb")
+        make_rotated_static_glb(self.glb)
+
+    def test_auto_rig_resets_node_rotation(self):
+        self.assertTrue(worker.auto_rig(self.glb, self.out))
+        gltf, _ = worker._read_glb(self.out)
+        node = next(n for n in gltf["nodes"] if "mesh" in n)
+        self.assertEqual(node.get("rotation"), [0.0, 0.0, 0.0, 1.0])
+
+    def test_auto_rig_bakes_true_height_into_y_axis(self):
+        worker.auto_rig(self.glb, self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        positions = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+        ys = [p[1] for p in positions]
+        # 회전을 굽지 않으면 로컬 Y(깊이) 범위는 0.6에 불과하다 — 반드시 실제
+        # 키(1.8, 로컬 Z였던 축)가 Y축 범위가 되어야 한다.
+        self.assertAlmostEqual(max(ys) - min(ys), 1.8, places=4)
+
+    def test_weight_regions_match_true_upright_pose(self):
+        """구운 좌표 기준으로 발/머리 조인트가 실제 몸 형태에 맞게 배정되는지 확인
+        (버그 상태에서는 눌린 0.6m 범위 안에서 잘못 배정된다)."""
+        worker.auto_rig(self.glb, self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        skin = gltf["skins"][0]
+        joint_nodes = skin["joints"]
+        node_name = {n: gltf["nodes"][n]["name"] for n in joint_nodes}
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        positions = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+        acc = gltf["accessors"][attrs["JOINTS_0"]]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        base = view["byteOffset"]
+        for i, (x, y, z) in enumerate(positions):
+            ji = struct.unpack_from("<H", bin_data, base + i * 8)[0]
+            jname = node_name[joint_nodes[ji]]
+            if y < 0.1 * 1.8:
+                self.assertIn("Foot", jname, f"vertex at y={y:.2f} should be Foot, got {jname}")
+            elif y > 0.8 * 1.8:
+                self.assertEqual(jname, "Head", f"vertex at y={y:.2f} should be Head, got {jname}")
+
+    def test_bake_texture_projects_using_true_upright_axis(self):
+        """retopo 단계 텍스처 투영도 회전 보정 후 좌표를 사용해야 한다."""
+        png = os.path.join(self.tmp.name, "ref.png")
+        with open(png, "wb") as f:
+            f.write(make_png())
+        out = os.path.join(self.tmp.name, "textured.glb")
+        self.assertTrue(worker.bake_texture(self.glb, png, out))
+        gltf, bin_data = worker._read_glb(out)
+        node = next(n for n in gltf["nodes"] if "mesh" in n)
+        self.assertEqual(node.get("rotation"), [0.0, 0.0, 0.0, 1.0])
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        positions = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+        ys = [p[1] for p in positions]
+        self.assertAlmostEqual(max(ys) - min(ys), 1.8, places=4)
+
+
 SMPLH_JOINTS = [
     "Pelvis", "L_Hip", "R_Hip", "Spine1", "L_Knee", "R_Knee", "Spine2",
     "L_Ankle", "R_Ankle", "Spine3", "L_Foot", "R_Foot", "Neck", "L_Collar",

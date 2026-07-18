@@ -23,6 +23,9 @@ import time
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import validate_character  # noqa: E402  렌더링 정상성 게이트(직립/관절계층/스킨변형)
+
 ROOT = Path(os.environ.get("MATRIX_ROOT", "/tmp/spriteengine_matrix"))
 CHARS = ROOT / "characters"
 WS = ROOT / "ws"
@@ -186,15 +189,27 @@ def stage_bake():
             anims = gltf.get("animations", [])
             chans = sorted({len(a.get("channels", [])) for a in anims})
             names = [a.get("name") for a in anims]
+            # 렌더링 정상성 게이트: 직립/관절계층/스킨변형이 전부 통과해야
+            # "정상적으로 렌더링되는 캐릭터"로 인정한다.
+            check = validate_character.validate(baked["path"])
             report[name] = {"animations": len(anims), "channels": chans,
-                            "names": names, "path": baked["path"]}
-            print(f"[bake] {name}: {len(anims)} clips, channels={chans}", flush=True)
+                            "names": names, "path": baked["path"],
+                            "render_valid": check["ok"],
+                            "render_issues": (check["upright"]["issues"]
+                                              + check["hierarchy"]["issues"]
+                                              + check["deformation"]["issues"])}
+            status = "OK" if check["ok"] else "RENDER-INVALID"
+            print(f"[bake] {name}: {len(anims)} clips, channels={chans}, render={status}", flush=True)
+            if not check["ok"]:
+                for issue in report[name]["render_issues"]:
+                    print(f"[bake]   {name}: {issue}", flush=True)
         except Exception as exc:  # noqa: BLE001
             report[name] = f"ERROR: {exc}"
             print(f"[bake] {name}: ERROR {exc}", flush=True)
     (ROOT / "matrix_report.json").write_text(json.dumps(report, indent=2))
-    ok = sum(1 for v in report.values() if isinstance(v, dict) and v["animations"] == len(MOTIONS))
-    print(f"[bake] {ok}/{len(report)} characters fully baked with {len(MOTIONS)} clips", flush=True)
+    ok = sum(1 for v in report.values()
+             if isinstance(v, dict) and v["animations"] == len(MOTIONS) and v["render_valid"])
+    print(f"[bake] {ok}/{len(report)} characters fully baked, {len(MOTIONS)} clips, and render-valid", flush=True)
     print(json.dumps(report, indent=2))
 
 

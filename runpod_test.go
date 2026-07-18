@@ -212,3 +212,141 @@ func TestRunNextStageMotionRoutesToHYMotion(t *testing.T) {
 		t.Fatalf("export stage should be ready: %#v", job.Stages[5])
 	}
 }
+
+// 30개 프롬프트는 RunPod handler의 job당 20개 제한을 넘으므로 15+15 두 배치로
+// 나뉘어 전송되고, 응답이 하나의 hy_motion.json으로 병합돼 30클립이 베이킹돼야 한다.
+func TestRunPodGenerateMotionBatchesOver20(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("SPRITEENGINE_CONFIG_DIR", cfgDir)
+	t.Setenv("RUNPOD_ENDPOINT_ID", "")
+	t.Setenv("RUNPOD_API_KEY", "")
+
+	a := NewApp()
+	source := filepath.Join(t.TempDir(), "hero.png")
+	pngHeader := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), []byte("\x00\x00\x00\x10\x00\x00\x00\x20")...)
+	if err := os.WriteFile(source, pngHeader, 0644); err != nil {
+		t.Fatal(err)
+	}
+	job, err := a.importPath(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ { // prepare→reconstruct→retopo→rig 오프라인 실행
+		if job, err = a.RunNextStage(job.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	joints := []string{
+		"Pelvis", "L_Hip", "R_Hip", "Spine1", "L_Knee", "R_Knee", "Spine2",
+		"L_Ankle", "R_Ankle", "Spine3", "L_Foot", "R_Foot", "Neck", "L_Collar",
+		"R_Collar", "Head", "L_Shoulder", "R_Shoulder", "L_Elbow", "R_Elbow",
+		"L_Wrist", "R_Wrist",
+	}
+	var batchSizes []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/run") {
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			Input struct {
+				Prompts []MotionPrompt `json:"prompts"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+		if len(req.Input.Prompts) > 20 {
+			t.Errorf("batch exceeds handler limit: %d prompts", len(req.Input.Prompts))
+		}
+		batchSizes = append(batchSizes, len(req.Input.Prompts))
+		frame := make([][]float64, len(joints))
+		for i := range frame {
+			frame[i] = []float64{0, 0, 0, 1}
+		}
+		quats := [][][]float64{frame, frame, frame}
+		trans := [][]float64{{0, 0.9, 0}, {0, 0.95, 0}, {0, 0.9, 0}}
+		motions := make([]map[string]any, 0, len(req.Input.Prompts))
+		for _, p := range req.Input.Prompts {
+			motions = append(motions, map[string]any{
+				"id": p.ID, "text": p.Text, "fps": 30,
+				"joints": joints, "quats": quats, "trans": trans,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "mock-motion", "status": "COMPLETED",
+			"output": map[string]any{"model": "HY-Motion-1.0-Lite", "motions": motions, "errors": map[string]string{}},
+		})
+	}))
+	defer srv.Close()
+	creds := fmt.Sprintf(`{"endpointId":"ep-test","apiKey":"rpa_mock_key_1234","baseUrl":%q}`, srv.URL)
+	if err := os.WriteFile(filepath.Join(cfgDir, "runpod.json"), []byte(creds), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	prompts := make([]MotionPrompt, 30)
+	for i := range prompts {
+		prompts[i] = MotionPrompt{ID: fmt.Sprintf("clip%02d", i+1),
+			Text: fmt.Sprintf("motion variant %d", i+1), Duration: 4}
+	}
+	result, err := a.RunPodGenerateMotion(job.ID, prompts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batchSizes) != 2 || batchSizes[0] != 15 || batchSizes[1] != 15 {
+		t.Fatalf("expected balanced 15+15 batches, got %v", batchSizes)
+	}
+	if result.Clips != 30 {
+		t.Fatalf("expected 30 baked clips, got %d", result.Clips)
+	}
+	// 병합된 hy_motion.json에 30개 모션이 순서대로 들어있는지 확인
+	raw, err := os.ReadFile(filepath.Join(job.Workspace, "motion", "hy_motion.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mergedFile struct {
+		Model   string `json:"model"`
+		Motions []struct {
+			ID string `json:"id"`
+		} `json:"motions"`
+	}
+	if err := json.Unmarshal(raw, &mergedFile); err != nil {
+		t.Fatal(err)
+	}
+	if mergedFile.Model != "HY-Motion-1.0-Lite" || len(mergedFile.Motions) != 30 {
+		t.Fatalf("merged hy_motion.json invalid: model=%q motions=%d", mergedFile.Model, len(mergedFile.Motions))
+	}
+	if mergedFile.Motions[0].ID != "clip01" || mergedFile.Motions[29].ID != "clip30" {
+		t.Fatalf("merged motion order broken: first=%s last=%s", mergedFile.Motions[0].ID, mergedFile.Motions[29].ID)
+	}
+}
+
+func TestChunkMotionPromptsBalance(t *testing.T) {
+	mk := func(n int) []MotionPrompt {
+		out := make([]MotionPrompt, n)
+		for i := range out {
+			out[i] = MotionPrompt{ID: fmt.Sprintf("p%d", i)}
+		}
+		return out
+	}
+	cases := []struct {
+		n    int
+		want []int
+	}{
+		{5, []int{5}}, {20, []int{20}}, {21, []int{11, 10}},
+		{30, []int{15, 15}}, {45, []int{15, 15, 15}}, {60, []int{20, 20, 20}},
+	}
+	for _, c := range cases {
+		got := chunkMotionPrompts(mk(c.n), 20)
+		sizes := make([]int, len(got))
+		total := 0
+		for i, b := range got {
+			sizes[i] = len(b)
+			total += len(b)
+		}
+		if total != c.n || fmt.Sprint(sizes) != fmt.Sprint(c.want) {
+			t.Errorf("n=%d: got %v want %v", c.n, sizes, c.want)
+		}
+	}
+}
