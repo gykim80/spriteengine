@@ -57,6 +57,30 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
 
   useEffect(() => { if (renaming) renameRef.current?.select(); }, [renaming]);
 
+  // 열린 카드 메뉴는 바깥 클릭 또는 Escape로 닫는다.
+  useEffect(() => {
+    if (!menuFor) return;
+    const onPointer = (e: PointerEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest('.card-menu') && !t.closest('.card-menu-btn')) {
+        setMenuFor(null);
+        setConfirmDelete(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMenuFor(null);
+        setConfirmDelete(null);
+      }
+    };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuFor]);
+
   function beginRename(j: Job) {
     setRenaming(j.id);
     setDraft(j.name);

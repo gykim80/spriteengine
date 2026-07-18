@@ -40,6 +40,13 @@ function App() {
     return () => { off(); offJob(); };
   }, []);
 
+  // notice는 8초 뒤 자동으로 사라진다 (클릭으로 즉시 닫기도 유지).
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(''), 8000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
   const updateJob = (j: Job) => setJobs(v => v.map(x => (x.id === j.id ? j : x)));
 
   async function importImage() {
