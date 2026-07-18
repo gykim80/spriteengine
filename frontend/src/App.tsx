@@ -51,6 +51,20 @@ function App() {
     return () => { off(); offJob(); };
   }, []);
 
+  // 스튜디오 툴 표준 단축키: ⌘/Ctrl+1~4로 워크스페이스 뷰 전환
+  useEffect(() => {
+    const order: View[] = ['projects', 'studio', 'library', 'settings'];
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      const i = ['1', '2', '3', '4'].indexOf(e.key);
+      if (i === -1) return;
+      e.preventDefault();
+      setView(order[i]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // notice는 8초 뒤 자동으로 사라진다 (클릭으로 즉시 닫기도 유지).
   useEffect(() => {
     if (!notice) return;
@@ -224,7 +238,7 @@ function App() {
           </div>
         </header>
         {notice && view !== 'settings' && (
-          <div className="notice-wrap">
+          <div className="notice-wrap" role="status">
             <button className="notice" onClick={() => setNotice('')}>{notice}<span>×</span></button>
           </div>
         )}
