@@ -50,17 +50,21 @@ GPU_TYPES = [
 # 별도 설치한다 (cupy는 requirements.txt에만 있고 코드에서 import되지 않음).
 REQ_FILTER = "^--extra-index-url|^tb_nightly|^torchmetrics|^deepspeed|^bpy|^gradio|^fastapi|^uvicorn|^basicsr|^realesrgan|^cupy"
 
+# 주의: 작업 본문을 `{ ... } && echo OK || echo FAIL`로 감싸면 bash가 종료코드를
+# 테스트하는 컴파운드 내부에서 set -e를 무력화해 중간 실패(pip 오류 등)가 조용히
+# 무시된다. 본문을 파일로 저장해 자식 bash로 실행해야 errexit이 온전히 동작한다.
 BOOTSTRAP_SCRIPT = r"""
 mkdir -p /srv/progress
 cd /srv/progress
 : > progress.log
 python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
-{
+cat > /srv/bootstrap_work.sh <<'WORK'
     set -euo pipefail
     export DEBIAN_FRONTEND=noninteractive
     V=/runpod-volume
     apt-get update -qq
-    apt-get install -y -qq git build-essential cmake libgl1 libglib2.0-0 python3-dev wget curl
+    apt-get install -y -qq git build-essential cmake libgl1 libglib2.0-0 python3-dev wget curl \
+        libegl1 libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6
     if [ ! -e "$V/hunyuan3d21/requirements.txt" ]; then
         rm -rf "$V/hunyuan3d21"
         git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git "$V/hunyuan3d21"
@@ -84,6 +88,12 @@ python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
         pip install --no-cache-dir --upgrade --target "$V/pydeps311" --no-deps basicsr==1.4.2 realesrgan==0.3.0
         pip install --no-cache-dir --upgrade --target "$V/pydeps311" addict future lmdb yapf
     fi
+    # hy3dpaint의 DifferentiableRenderer/mesh_utils.py는 최상단에서 bpy(Blender)를
+    # import하고 최종 OBJ→GLB 변환도 Blender로 수행한다 — cp311 휠을 볼륨에 설치.
+    # (4.2는 Python 3.11 대상의 LTS 라인; 4.1.x는 PyPI에서 제공되지 않는다)
+    if ! PYTHONPATH="$V/pydeps311" python3 -c "import bpy" 2>/dev/null; then
+        pip install --no-cache-dir --upgrade --target "$V/pydeps311" --no-deps bpy==4.2.22 zstandard
+    fi
     # basicsr 1.4.2는 torchvision>=0.17에서 제거된 functional_tensor를 import한다.
     sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' \
         "$V/pydeps311/basicsr/data/degradations.py" || true
@@ -95,10 +105,16 @@ python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
           pip wheel --no-cache-dir --no-build-isolation --no-deps -w /tmp/wheels . )
         pip install --no-deps --target "$V/pydeps311" /tmp/wheels/custom_rasterizer*.whl
     fi
-    # DifferentiableRenderer의 pybind11 인페인트 모듈(.so)을 볼륨 안에 컴파일
-    if ! ls "$V/hunyuan3d21/hy3dpaint/DifferentiableRenderer"/mesh_inpaint_processor*.so >/dev/null 2>&1; then
+    # DifferentiableRenderer의 pybind11 인페인트 모듈(.so)을 볼륨 안에 컴파일.
+    # 업스트림 compile_mesh_painter.sh는 python3-config(apt의 3.10)를 쓰므로
+    # cpython-310 접미사가 붙어 3.11 워커에서 import되지 않는다 — 실행 중인
+    # 인터프리터의 EXT_SUFFIX로 직접 컴파일한다.
+    if ! PYTHONPATH="$V/pydeps311:$V/hunyuan3d21/hy3dpaint" python3 -c "from DifferentiableRenderer.mesh_inpaint_processor import meshVerticeInpaint" 2>/dev/null; then
         ( cd "$V/hunyuan3d21/hy3dpaint/DifferentiableRenderer" && \
-          PYTHONPATH="$V/pydeps311" PATH="$V/pydeps311/bin:$PATH" bash compile_mesh_painter.sh )
+          SUFFIX=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))") && \
+          c++ -O3 -Wall -shared -std=c++11 -fPIC \
+              $(PYTHONPATH="$V/pydeps311" python3 -m pybind11 --includes) \
+              mesh_inpaint_processor.cpp -o "mesh_inpaint_processor$SUFFIX" )
     fi
     # RealESRGAN 체크포인트 (imageSuperNet 업스케일러)
     mkdir -p "$V/hunyuan3d21/hy3dpaint/ckpt"
@@ -126,18 +142,30 @@ sys.path.insert(0, "/runpod-volume/hunyuan3d21/hy3dpaint")
 import basicsr
 import custom_rasterizer
 import realesrgan
-print("imports ok:", Hunyuan3DDiTFlowMatchingPipeline.__name__, "+ paint deps")
+import bpy
+# MeshRender는 인페인트 모듈 부재를 try/except로 삼키므로 직접 import해 검증한다.
+from DifferentiableRenderer.mesh_inpaint_processor import meshVerticeInpaint
+# 전체 paint 파이프라인 모듈을 import해 누락 의존성(bpy 등)을 여기서 잡는다.
+import textureGenPipeline
+print("imports ok:", Hunyuan3DDiTFlowMatchingPipeline.__name__, "+ paint deps + bpy", bpy.app.version_string)
 PY
     touch "$V/.spriteengine-bootstrap-complete"
     du -sh "$V/pydeps311" "$V/hunyuan3d21"
-} >> progress.log 2>&1 && echo BOOTSTRAP_OK >> progress.log || echo BOOTSTRAP_FAIL >> progress.log
+WORK
+if bash /srv/bootstrap_work.sh >> progress.log 2>&1; then
+    echo BOOTSTRAP_OK >> progress.log
+else
+    echo BOOTSTRAP_FAIL >> progress.log
+fi
 sleep 3600
 """.replace("__REQ_FILTER__", REQ_FILTER)
 
 # Worker start: deps/code/weights all live on the volume; the base image only
-# provides python 3.11 + CUDA userland. libgl is needed by opencv at import.
+# provides python 3.11 + CUDA userland. libgl은 opencv, X/EGL 계열은 bpy(Blender)
+# import에 필요하다.
 WORKER_CMD = (
-    "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq libgl1 libglib2.0-0 >/dev/null 2>&1 || true; "
+    "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq libgl1 libegl1 libglib2.0-0 "
+    "libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 >/dev/null 2>&1 || true; "
     "exec python -u /runpod-volume/spriteengine/handler.py"
 )
 WORKER_ENV = {
@@ -218,7 +246,15 @@ def ensure_endpoint(key, volume):
         })
         print(f"template created: {template['id']}")
     else:
-        print(f"template reuse: {template['id']}")
+        # WORKER_CMD/WORKER_ENV가 바뀌어도 기존 템플릿에 반영되도록 동기화한다.
+        request(key, "PATCH", "/templates/" + template["id"], {
+            "name": TEMPLATE_NAME,
+            "imageName": WORKER_IMAGE,
+            "env": WORKER_ENV,
+            "dockerEntrypoint": [],
+            "dockerStartCmd": ["bash", "-c", WORKER_CMD],
+        })
+        print(f"template synced: {template['id']}")
 
     endpoint = find_named(key, "/endpoints", ENDPOINT_NAME)
     if not endpoint:

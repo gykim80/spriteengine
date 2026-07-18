@@ -60,12 +60,13 @@ Output은 `format`, `model`, `bytes`, `textured`, `glb_base64`를 포함한다. 
 `bootstrap_endpoint.py`가 볼륨에 추가로 준비하는 것:
 
 - `basicsr==1.4.2`/`realesrgan==0.3.0` (`--no-deps` 증분 설치 + torchvision `functional_tensor` sed 패치)
+- `bpy==4.2.22` (Blender 4.2 LTS Python 모듈, cp311) — `DifferentiableRenderer/mesh_utils.py`가 최상단에서 import하고 최종 OBJ→GLB 변환을 Blender로 수행한다. 누락 시 paint 단계가 `ModuleNotFoundError: bpy`로 폴백된다. worker start command가 X/EGL 런타임 라이브러리(libxrender1, libxi6, libxkbcommon0, libegl1 등)를 apt로 설치한다
 - `custom_rasterizer` CUDA 확장 — nvcc가 필요해 부트스트랩 pod이 worker와 같은 `runpod/pytorch` devel 이미지를 사용한다 (GPU 불필요, `TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9`)
 - `DifferentiableRenderer/mesh_inpaint_processor*.so` (pybind11 컴파일)
 - `hy3dpaint/ckpt/RealESRGAN_x4plus.pth` 체크포인트
 - HF 캐시 프리워밍: `tencent/Hunyuan3D-2.1`의 `hunyuan3d-paintpbr-v2-1/*` + `facebook/dinov2-giant` — 첫 텍스처 요청이 20분 타임아웃에 걸리지 않게 한다
 
-기존 볼륨에는 `RUNPOD_API_KEY=... python3 deploy/runpod/bootstrap_endpoint.py`를 다시 실행하면 된다 — shape 의존성은 import 검사로 건너뛰고 paint 단계만 증분으로 채워진다. 템플릿/엔드포인트 env 변경은 필요 없다 (handler가 `HUNYUAN_PAINT_ROOT` 기본값으로 sys.path를 스스로 구성).
+기존 볼륨에는 `RUNPOD_API_KEY=... python3 deploy/runpod/bootstrap_endpoint.py`를 다시 실행하면 된다 — shape 의존성은 import 검사로 건너뛰고 paint 단계만 증분으로 채워지며, 마지막에 `import textureGenPipeline` 전체 검증으로 누락 의존성을 부트스트랩 단계에서 잡는다. 재사용 템플릿은 PATCH로 start command/env가 동기화된다 (handler는 `HUNYUAN_PAINT_ROOT` 기본값으로 sys.path를 스스로 구성).
 
 ## Cost and operational notes
 
