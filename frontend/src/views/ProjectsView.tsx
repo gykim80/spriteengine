@@ -141,7 +141,7 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
                       <b title={j.name}>{j.name}</b>
                       <small>{j.progress}% · {j.artifacts?.length || 0} artifacts · {new Date(j.created).toLocaleDateString()}</small>
                     </div>
-                    <button className="card-menu-btn" aria-label="Project options"
+                    <button className="card-menu-btn" aria-label="Project options" aria-haspopup="menu" aria-expanded={menuFor === j.id}
                       onClick={() => { setMenuFor(menuFor === j.id ? null : j.id); setConfirmDelete(null); }}>
                       <MoreHorizontal />
                     </button>
@@ -149,15 +149,15 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
                 )}
                 {menuFor === j.id && (
                   <div className="card-menu" role="menu">
-                    <button onClick={() => beginRename(j)}><Pencil />Rename</button>
-                    <button onClick={() => openWorkspace(j.id)}><FolderOpen />Open workspace</button>
+                    <button role="menuitem" onClick={() => beginRename(j)}><Pencil />Rename</button>
+                    <button role="menuitem" onClick={() => openWorkspace(j.id)}><FolderOpen />Open workspace</button>
                     {confirmDelete === j.id ? (
-                      <button className="danger" disabled={running_}
+                      <button role="menuitem" className="danger" disabled={running_}
                         onClick={async () => { setMenuFor(null); setConfirmDelete(null); await onDelete(j.id); }}>
                         <Trash2 />정말 삭제할까요?
                       </button>
                     ) : (
-                      <button className="danger" disabled={running_} onClick={() => setConfirmDelete(j.id)}>
+                      <button role="menuitem" className="danger" disabled={running_} onClick={() => setConfirmDelete(j.id)}>
                         <Trash2 />{running_ ? 'Processing 중에는 불가' : 'Delete project'}
                       </button>
                     )}

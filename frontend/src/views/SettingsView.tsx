@@ -36,6 +36,11 @@ export default function SettingsView({runpod, setRunpod, running, setRunning, no
       setRunning(false);
     }
   }
+  // Enter로 저장 실행 (Verify & save 버튼과 동일한 활성 조건)
+  const canSave = !running && !!runpod.endpointId && (!!runpodKey || runpod.configured);
+  function onFieldKey(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' && canSave) save();
+  }
   async function clear() {
     setRunning(true);
     try {
@@ -68,15 +73,15 @@ export default function SettingsView({runpod, setRunpod, running, setRunning, no
         <h2>RunPod Serverless</h2>
         <p>API key는 Go backend에만 저장되며 frontend state나 project manifest에 기록되지 않습니다.</p>
         <label>Endpoint ID
-          <input value={runpod.endpointId} onChange={e => setRunpod({...runpod, endpointId: e.target.value})} placeholder="예: abcdef123456" />
+          <input value={runpod.endpointId} onChange={e => setRunpod({...runpod, endpointId: e.target.value})} onKeyDown={onFieldKey} placeholder="예: abcdef123456" />
         </label>
         <label>API key
-          <input type="password" autoComplete="new-password" spellCheck={false} value={runpodKey} onChange={e => setRunpodKey(e.target.value)}
+          <input type="password" autoComplete="new-password" spellCheck={false} value={runpodKey} onChange={e => setRunpodKey(e.target.value)} onKeyDown={onFieldKey}
             placeholder={runpod.configured ? `Configured via ${runpod.keySource} · 변경할 때만 입력` : 'RunPod Settings에서 생성한 API key 원문'} />
           <small>Endpoint ID, 가려진 **** 값, GitHub/Hugging Face token은 사용할 수 없습니다.</small>
         </label>
         <label>API base URL
-          <input value={runpod.baseUrl} onChange={e => setRunpod({...runpod, baseUrl: e.target.value})} />
+          <input value={runpod.baseUrl} onChange={e => setRunpod({...runpod, baseUrl: e.target.value})} onKeyDown={onFieldKey} />
         </label>
         <div className="settings-actions">
           <button disabled={running || !runpod.configured} onClick={test}>Test connection</button>
@@ -85,7 +90,7 @@ export default function SettingsView({runpod, setRunpod, running, setRunning, no
             {running ? 'Authenticating…' : 'Verify & save'}
           </button>
         </div>
-        {notice && <div className="settings-notice">{notice}</div>}
+        {notice && <div className="settings-notice" role="status">{notice}</div>}
       </div>
       <div className="settings-card system-card">
         <span className="eyebrow">SYSTEM</span>
