@@ -1,4 +1,4 @@
-import {Clapperboard, LayoutGrid, Library, Settings, Sparkles} from 'lucide-react';
+import {Clapperboard, LayoutGrid, Library, Settings} from 'lucide-react';
 import type {View} from '../types';
 
 type Props = {
@@ -19,7 +19,6 @@ export default function Sidebar({view, onNavigate, runpodConfigured, running, se
   return (
     <aside>
       <div className="brand">
-        <div className="mark"><Sparkles /></div>
         <div><b>AISTUDIO</b><span>AI CHARACTER STUDIO</span></div>
       </div>
       <nav>

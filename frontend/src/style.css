@@ -47,11 +47,9 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;bac
 /* ── Shell & Sidebar ─────────────────────── */
 .shell{height:100vh;display:grid;grid-template-columns:236px 1fr;overflow:hidden}
 aside{background:var(--surface);border-right:1px solid var(--border);padding:24px 16px;display:flex;flex-direction:column}
-.brand{display:flex;align-items:center;gap:11px;padding:0 8px 26px}
+.brand{display:flex;align-items:center;padding:2px 8px 26px}
 .brand b{font-size:14px;letter-spacing:1.4px;display:block;font-weight:800}
 .brand span{font:9px 'DM Mono';color:var(--muted);letter-spacing:1.2px}
-.mark{width:36px;height:36px;background:var(--accent);color:#fff;display:grid;place-items:center;border-radius:10px;box-shadow:0 4px 12px rgba(0,87,255,.28)}
-.mark svg{width:18px}
 .brand+nav{border-top:1px solid var(--border);padding-top:16px}
 nav{display:grid;gap:4px}
 .nav-label{font:9px 'DM Mono';color:var(--muted);letter-spacing:1.5px;padding:0 13px;margin:2px 0 5px}
