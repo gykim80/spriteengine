@@ -53,7 +53,8 @@ GLB_MAGIC, CHUNK_JSON, CHUNK_BIN = 0x46546C67, 0x4E4F534A, 0x004E4942
 
 
 def _read_glb(path):
-    data = open(path, "rb").read()
+    with open(path, "rb") as f:
+        data = f.read()
     if len(data) < 12 or struct.unpack("<I", data[:4])[0] != GLB_MAGIC:
         raise ValueError("not a GLB file")
     json_chunk, bin_chunk, offset = None, b"", 12
@@ -84,10 +85,10 @@ def _write_glb(gltf, bin_data, path):
         f.write(blob)
 
 
-def _read_positions(gltf, bin_data, accessor_index):
+def _read_vec3(gltf, bin_data, accessor_index, what):
     acc = gltf["accessors"][accessor_index]
     if acc.get("componentType") != 5126 or acc.get("type") != "VEC3" or "bufferView" not in acc:
-        raise ValueError("POSITION accessor is not float32 VEC3")
+        raise ValueError(f"{what} accessor is not float32 VEC3")
     view = gltf["bufferViews"][acc["bufferView"]]
     stride = view.get("byteStride", 12)
     base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
@@ -125,7 +126,8 @@ def bake_texture(glb_path, image_path, output_path):
     buffers = gltf.get("buffers") or []
     if not buffers or "uri" in buffers[0]:
         return False  # 외부 버퍼 GLB는 baseline 범위 밖
-    image_bytes = open(image_path, "rb").read()
+    with open(image_path, "rb") as f:
+        image_bytes = f.read()
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         mime = "image/png"
     elif image_bytes[:2] == b"\xff\xd8":
@@ -139,7 +141,7 @@ def bake_texture(glb_path, image_path, output_path):
             attrs = prim.get("attributes", {})
             if "POSITION" not in attrs or "TEXCOORD_0" in attrs:
                 continue
-            positions = _read_positions(gltf, bin_data, attrs["POSITION"])
+            positions = _read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
             min_x, max_x = min(p[0] for p in positions), max(p[0] for p in positions)
             min_y, max_y = min(p[1] for p in positions), max(p[1] for p in positions)
             span_x, span_y = (max_x - min_x) or 1.0, (max_y - min_y) or 1.0
@@ -151,6 +153,19 @@ def bake_texture(glb_path, image_path, output_path):
             gltf["accessors"].append({"bufferView": view, "componentType": 5126,
                                       "count": len(positions), "type": "VEC2"})
             attrs["TEXCOORD_0"] = len(gltf["accessors"]) - 1
+            if "NORMAL" in attrs and "COLOR_0" not in attrs:
+                # 정면 투영은 뒷면에 앞면 텍스처가 미러링되므로, 법선 z가
+                # 뒤를 향할수록 정점 컬러(COLOR_0)로 어둡게 해 깊이감을 준다.
+                normals = _read_vec3(gltf, bin_data, attrs["NORMAL"], "NORMAL")
+                colors = bytearray()
+                for _, _, nz in normals:
+                    shade = int(255 * (0.55 + 0.45 * max(nz, 0.0)))
+                    colors += bytes((shade, shade, shade, 255))
+                cview = _append_view(gltf, bin_data, colors)
+                # vertex attribute stride는 4의 배수여야 하므로 VEC4 ubyte 사용
+                gltf["accessors"].append({"bufferView": cview, "componentType": 5121,
+                                          "normalized": True, "count": len(normals), "type": "VEC4"})
+                attrs["COLOR_0"] = len(gltf["accessors"]) - 1
             prim["material"] = 0  # 아래에서 materials를 투영 머티리얼 하나로 교체
             textured = True
     if not textured:
