@@ -388,9 +388,11 @@ def auto_rig(glb_path, output_path):
     }
     for side in ("Left", "Right"):
         a, f = JWORLD[side + "Arm"], JWORLD[side + "ForeArm"]
-        tips[side + "ForeArm"] = tuple(f[k] + (f[k] - a[k]) for k in range(3))  # 손끝 연장
-    bones = [(ji, JWORLD[name], tips.get(name) or JWORLD[BONE_CHILD[name]])
-             for ji, name in enumerate(JNAMES)]
+        tips[side + "ForeArm"] = tuple(f[k] + (f[k] - a[k]) for k in range(3))  # 1차: 직선 연장
+
+    def _bones(t):
+        return [(ji, JWORLD[name], t.get(name) or JWORLD[BONE_CHILD[name]])
+                for ji, name in enumerate(JNAMES)]
 
     def _seg_dist2(p, a, b):
         ab = [b[k] - a[k] for k in range(3)]
@@ -399,11 +401,47 @@ def auto_rig(glb_path, output_path):
         t = max(0.0, min(1.0, sum(ap[k] * ab[k] for k in range(3)) / denom))
         return sum((ap[k] - t * ab[k]) ** 2 for k in range(3))
 
+    # 전완 팁 실측 보정(2-pass): bbox 배치는 팔이 어깨→손까지 직선이라
+    # 가정하지만 실측 캐릭터는 rest에서 팔꿈치가 36~64° 굽어 있어, 직선
+    # 연장 팁으로는 손 지오메트리가 전완 본 거리장에서 멀어져 허벅지 본에
+    # 지배권을 뺏긴다(A-pose 손끝-허벅지 4~13cm). 1차 지배 배정으로 전완
+    # 지배 버텍스의 말단 원심을 구해 전완 본 세그먼트를 실제 손 방향으로
+    # 다시 놓는다.
+    bones = _bones(tips)
+    dom = [min(bones, key=lambda b: _seg_dist2(p, b[1], b[2]))[0] for p in all_pos]
+    for side in ("Left", "Right"):
+        fj = JNAMES.index(side + "ForeArm")
+        fpos = JWORLD[side + "ForeArm"]
+        mine = [p for p, d in zip(all_pos, dom) if d == fj]
+        if len(mine) < 8:
+            continue
+        far = sorted(mine, key=lambda p: -sum((p[k] - fpos[k]) ** 2 for k in range(3)))
+        far = far[:max(1, len(far) // 10)]
+        c = [sum(p[k] for p in far) / len(far) for k in range(3)]
+        if sum((c[k] - fpos[k]) ** 2 for k in range(3)) > 1e-8:
+            # 원심을 15% 지나치게 연장해 손끝까지 세그먼트가 닿도록 함
+            tips[side + "ForeArm"] = tuple(fpos[k] + 1.15 * (c[k] - fpos[k]) for k in range(3))
+    bones = _bones(tips)
+
+    # 체인 인접 블렌딩 제한: 2번째 본은 지배 본과 스켈레톤에서 인접(부모/
+    # 자식)한 본만 허용한다. 순수 거리 기반이던 이전 방식은 손 버텍스의
+    # 21~53%가 UpLeg 보조 웨이트를 받아(실측 4캐릭터), 팔을 들거나 몸을
+    # 숙이면 손이 다리에 앵커링된 채 늘어나는 웨빙·"손이 몸에 붙는" 증상의
+    # 주범이었다.
+    ADJACENT = {name: set() for name in JNAMES}
+    for name, _, parent in JDEF:
+        if parent:
+            ADJACENT[name].add(parent)
+            ADJACENT[parent].add(name)
+
     def joint_weights(p):
-        """지배(가까운) 조인트 우선 2개와 정규화 가중치 — (j1, j2, w1, w2)."""
-        (d1, j1), (d2, j2) = sorted((_seg_dist2(p, a, b), ji) for ji, a, b in bones)[:2]
+        """지배 조인트 + 인접 본 중 최근접 1개와 정규화 가중치 — (j1, j2, w1, w2)."""
+        dists = [(_seg_dist2(p, a, b), ji) for ji, a, b in bones]
+        d1, j1 = min(dists)
         if d1 < 1e-12:
             return j1, 0, 1.0, 0.0
+        allowed = ADJACENT[JNAMES[j1]]
+        d2, j2 = min((d, ji) for d, ji in dists if JNAMES[ji] in allowed)
         w1, w2 = 1.0 / d1, 1.0 / d2  # d는 거리 제곱 — 역제곱 가중
         return j1, j2, w1 / (w1 + w2), w2 / (w1 + w2)
 
@@ -517,16 +555,73 @@ def _rig_rest_world(gltf, node_by_name):
     return world
 
 
-def _arm_rest_deltas(gltf, node_by_name):
+def _mesh_forearm_dirs(gltf, bin_data, world):
+    """스킨 웨이트로 전완 지배 버텍스를 찾아 실측 전완 방향을 구한다.
+
+    반환: {"Left": 단위벡터, "Right": 단위벡터} — 전완 조인트에서 지배
+    버텍스 말단 원심(원거리 10%)으로 향하는 방향. 실측 불가 시 키 없음.
+    """
+    skins = gltf.get("skins") or []
+    if not skins:
+        return {}
+    joints = skins[0]["joints"]
+    jname = [gltf["nodes"][j].get("name") for j in joints]
+    prim = next((p for m in gltf.get("meshes", []) for p in m.get("primitives", [])
+                 if "JOINTS_0" in p.get("attributes", {})), None)
+    if prim is None:
+        return {}
+    attrs = prim["attributes"]
+    pos = _read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+
+    def read_vec4(acc_index, fmt_map):
+        acc = gltf["accessors"][acc_index]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        fmt = fmt_map[acc["componentType"]]
+        stride = view.get("byteStride", struct.calcsize(fmt) * 4)
+        return [struct.unpack_from(f"<4{fmt}", bin_data, base + i * stride)
+                for i in range(acc["count"])]
+
+    vj = read_vec4(attrs["JOINTS_0"], {5121: "B", 5123: "H", 5125: "I"})
+    vw = read_vec4(attrs["WEIGHTS_0"], {5126: "f"})
+    dirs = {}
+    for side in ("Left", "Right"):
+        fore = world.get(side + "ForeArm")
+        if not fore:
+            continue
+        mine = []
+        for i in range(len(pos)):
+            slot = max(range(4), key=lambda s: vw[i][s])
+            if vj[i][slot] < len(jname) and jname[vj[i][slot]] == side + "ForeArm":
+                mine.append(pos[i])
+        if len(mine) < 8:
+            continue
+        far = sorted(mine, key=lambda p: -sum((p[k] - fore[k]) ** 2 for k in range(3)))
+        far = far[:max(1, len(far) // 10)]
+        c = [sum(p[k] for p in far) / len(far) for k in range(3)]
+        v = [c[k] - fore[k] for k in range(3)]
+        n = math.sqrt(sum(x * x for x in v))
+        if n > 1e-6:
+            dirs[side] = [x / n for x in v]
+    return dirs
+
+
+def _arm_rest_deltas(gltf, bin_data, node_by_name):
     """SMPL rest(T-pose, 팔 수평)와 rig rest(A-pose, 팔 대각선)의 차이 보정.
 
     SMPL 로컬 회전을 그대로 이식하면 rest 각도 차이만큼 팔이 추가로 꺾인다.
     각 팔 조인트에 대해 D = (수평 팔 방향 → rig rest 팔 방향) 최단호 회전을
     구해, 리타겟 시 q' = D_parent ⊗ q ⊗ D⁻¹로 보정한다 (두 스켈레톤 모두
     rest 조인트 로컬 프레임이 월드축 정렬이라 이 형태로 충분).
+
+    상완 delta는 리그 조인트 축(Arm→ForeArm)으로 구하고, 전완 delta는 메시
+    실측 전완 방향(_mesh_forearm_dirs)으로 구한다 — 실제 캐릭터는 rest에서
+    팔꿈치가 굽어 있어(실측 36~64°) 전완을 상완의 직선 연속으로 가정하면
+    팔꿈치 이하 월드 방향이 그만큼 틀어져 손이 몸통으로 파고든다.
     반환: (delta, delta_parent) — 조인트명 → 쿼터니언(xyzw), 없으면 항등 취급.
     """
     world = _rig_rest_world(gltf, node_by_name)
+    fore_dirs = _mesh_forearm_dirs(gltf, bin_data, world)
     delta, delta_parent = {}, {}
     for side in ("Left", "Right"):
         arm, fore = world.get(side + "Arm"), world.get(side + "ForeArm")
@@ -540,7 +635,9 @@ def _arm_rest_deltas(gltf, node_by_name):
         u = (1.0 if v[0] >= 0 else -1.0, 0.0, 0.0)  # T-pose: 같은 쪽 수평 바깥 방향
         d = _quat_from_to(u, v)
         delta[side + "Arm"] = d
-        delta[side + "ForeArm"] = d          # 팔뚝도 같은 대각선의 연속 — 동일 보정
+        vf = fore_dirs.get(side)
+        # 전완 실측 방향이 있으면 그것으로, 없으면 상완 연속 가정으로 폴백
+        delta[side + "ForeArm"] = _quat_from_to(u, vf) if vf else d
         delta_parent[side + "ForeArm"] = d   # 부모(Arm)의 delta
     return delta, delta_parent
 
@@ -573,7 +670,7 @@ def bake_animation(glb_path, motion_payload, output_path):
     # 확인되면 payload.up_axis="z"로 기저 변환을 켤 수 있다.
     zup = str(motion_payload.get("up_axis", "y")).lower() == "z"
     # SMPL rest(T-pose) ↔ rig rest(A-pose) 팔 각도 차이 보정용 rest-delta
-    arm_delta, arm_delta_parent = _arm_rest_deltas(gltf, node_by_name)
+    arm_delta, arm_delta_parent = _arm_rest_deltas(gltf, bin_data, node_by_name)
     hips_rest = gltf["nodes"][node_by_name["Hips"]].get("translation", [0.0, 0.0, 0.0])
     # 캐릭터 스케일: 메시 AABB 높이 / SMPL 신장 — 루트 이동을 캐릭터 크기에 맞춤
     ys = []

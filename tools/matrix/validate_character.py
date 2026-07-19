@@ -306,6 +306,16 @@ def check_arm_pose(gltf, bin_data):
 MAX_EDGE_STRETCH_P99 = 15.0
 SKIN_EDGE_SAMPLES = 1500
 
+# 팔↔다리 교차 웨빙: 순수 거리 기반 웨이트 시절 손 버텍스가 UpLeg과
+# 블렌드되어, 팔을 들면 손-허벅지 사이가 막처럼 늘어났다(실측 mechanic
+# ForeArm↔UpLeg 과신장 엣지 333건). 체인 인접 제한 수정 후에는 팔 체인과
+# 다리 체인 지배 버텍스를 잇는 엣지가 5배 이상 늘어나는 일이 없어야 한다.
+ARM_CHAIN = ("LeftArm", "LeftForeArm", "RightArm", "RightForeArm")
+LEG_CHAIN = ("LeftUpLeg", "LeftLeg", "LeftFoot",
+             "RightUpLeg", "RightLeg", "RightFoot")
+CROSS_WEB_RATIO = 5.0
+MAX_CROSS_CHAIN_WEB = 10  # 표본 엣지×프레임 관측 건수 상한
+
 
 def _read_accessor_uints(gltf, bin_data, acc_index, comps):
     acc = gltf["accessors"][acc_index]
@@ -361,6 +371,11 @@ def check_skinning(gltf, bin_data):
             rest_len[(a, b)] = d
     verts = sorted({v for e in rest_len for v in e})
     parent = _node_parents(gltf)
+    jname = [gltf["nodes"][j].get("name") for j in joints]
+    dom = {}
+    for vi in verts:
+        slot = max(range(4), key=lambda s: vweights[vi][s])
+        dom[vi] = jname[vjoints[vi][slot]] if vjoints[vi][slot] < len(jname) else None
 
     def skin_vertex(mats, vi):
         out = [0.0, 0.0, 0.0]
@@ -376,6 +391,8 @@ def check_skinning(gltf, bin_data):
 
     stretches = []
     worst = (0.0, None, None)  # (ratio, clip, edge)
+    cross_web = 0
+    cross_web_clip = None
     for anim in animations:
         tracks, frames = _anim_tracks(gltf, bin_data, anim)
         if not frames:
@@ -401,6 +418,12 @@ def check_skinning(gltf, bin_data):
                 stretches.append(ratio)
                 if ratio > worst[0]:
                     worst = (ratio, anim.get("name"), (a, b))
+                if ratio > CROSS_WEB_RATIO:
+                    ra, rb = dom.get(a), dom.get(b)
+                    if (ra in ARM_CHAIN and rb in LEG_CHAIN) or \
+                       (rb in ARM_CHAIN and ra in LEG_CHAIN):
+                        cross_web += 1
+                        cross_web_clip = anim.get("name")
     issues = []
     p99 = None
     if stretches:
@@ -408,10 +431,15 @@ def check_skinning(gltf, bin_data):
         if p99 > MAX_EDGE_STRETCH_P99:
             issues.append(f"skinned edges over-stretched: p99 ratio {p99:.2f} (limit {MAX_EDGE_STRETCH_P99}) "
                           f"worst {worst[0]:.2f} in clip {worst[1]!r} — webbing/weight assignment problem")
+        if cross_web > MAX_CROSS_CHAIN_WEB:
+            issues.append(f"arm-leg cross-chain webbing: {cross_web} stretched(>{CROSS_WEB_RATIO}x) edges "
+                          f"between arm/leg dominated vertices (limit {MAX_CROSS_CHAIN_WEB}, "
+                          f"e.g. clip {cross_web_clip!r}) — hand vertices blended with leg bones")
     return {"ok": not issues, "issues": issues,
             "edge_stretch_p99": None if p99 is None else round(p99, 3),
             "edge_stretch_max": round(worst[0], 3) if stretches else None,
-            "worst_clip": worst[1], "edges_sampled": len(rest_len)}
+            "worst_clip": worst[1], "cross_chain_web": cross_web,
+            "edges_sampled": len(rest_len)}
 
 
 def validate(glb_path):

@@ -183,6 +183,146 @@ def make_static_glb(path, scale=1.0):
     worker._write_glb(gltf, buf, path)
 
 
+def make_bent_arm_glb(path):
+    """실측 캐릭터형 합성 휴머노이드 — 팔꿈치가 굽고(전완이 앞+아래+안쪽)
+    손이 허벅지 근처(A-pose)에 오는 GLB. 웨이트 블리딩/전완 delta 회귀용.
+
+    반환: (버텍스 수, {"L": 손 클러스터 인덱스들, "R": ...})
+    """
+    pts = []
+    hand_idx = {"L": [], "R": []}
+    for y in (0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7):  # 몸통 기둥
+        for sx in (-1, 1):
+            for sz in (-1, 1):
+                pts.append((0.15 * sx, y, 0.1 * sz))
+    for y in (0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85):  # 다리
+        for sx in (-1, 1):
+            for sz in (-1, 1):
+                pts.append((0.13 * sx, y, 0.06 * sz))
+    # 팔: 어깨→팔꿈치 직선 + 팔꿈치→손 굽은 곡선(앞/아래/안쪽) + 손 클러스터
+    for label, s in (("R", -1), ("L", 1)):
+        sh, el, hand = (0.45 * s, 1.35, 0.0), (0.50 * s, 1.10, 0.0), (0.30 * s, 0.80, 0.22)
+        for i in range(5):
+            t = i / 4.0
+            pts.append((sh[0] + t * (el[0] - sh[0]), sh[1] + t * (el[1] - sh[1]), 0.0))
+        for i in range(1, 20):
+            t = i / 19.0
+            pts.append((el[0] + t * (hand[0] - el[0]),
+                        el[1] + t * (hand[1] - el[1]),
+                        el[2] + t * (hand[2] - el[2])))
+        for dx in (-0.02, 0.0, 0.02):
+            for dy in (-0.03, 0.0, 0.03):
+                hand_idx[label].append(len(pts))
+                pts.append((hand[0] + dx, hand[1] + dy, hand[2]))
+    pts.append((0.0, 0.0, 0.0))   # 발 바닥 (min_y=0)
+    pts.append((0.0, 1.8, 0.0))   # 머리 꼭대기 (max_y=1.8)
+
+    faces = []
+    for i in range(0, len(pts) - 2):
+        faces += [i, i + 1, i + 2]
+    buf = bytearray()
+    for v in pts:
+        buf += struct.pack("<fff", *v)
+    pos_len = len(buf)
+    for i in faces:
+        buf += struct.pack("<H", i)
+    gltf = {
+        "asset": {"version": "2.0"}, "scene": 0,
+        "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+        "buffers": [{"byteLength": len(buf)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": pos_len},
+            {"buffer": 0, "byteOffset": pos_len, "byteLength": len(buf) - pos_len},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(pts), "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5123, "count": len(faces), "type": "SCALAR"},
+        ],
+    }
+    worker._write_glb(gltf, buf, path)
+    return len(pts), hand_idx
+
+
+class BentArmRigTest(unittest.TestCase):
+    """'손이 몸에 붙는' 버그 회귀: 웨이트 체인 인접 제한 + 전완 delta 실측."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-bentarm-")
+        src = os.path.join(cls.tmp.name, "bent.glb")
+        cls.out = os.path.join(cls.tmp.name, "rigged.glb")
+        cls.n_pts, cls.hand_idx = make_bent_arm_glb(src)
+        assert worker.auto_rig(src, cls.out)
+        cls.gltf, cls.bin_data = worker._read_glb(cls.out)
+        skin = cls.gltf["skins"][0]
+        cls.jname = [cls.gltf["nodes"][j]["name"] for j in skin["joints"]]
+        attrs = cls.gltf["meshes"][0]["primitives"][0]["attributes"]
+        ja = cls.gltf["accessors"][attrs["JOINTS_0"]]
+        cls.jbase = cls.gltf["bufferViews"][ja["bufferView"]]["byteOffset"]
+        wa = cls.gltf["accessors"][attrs["WEIGHTS_0"]]
+        cls.wbase = cls.gltf["bufferViews"][wa["bufferView"]]["byteOffset"]
+        cls.node_by_name = {n.get("name"): i for i, n in enumerate(cls.gltf["nodes"])}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def _vert_joints(self, i):
+        j1, j2 = struct.unpack_from("<2H", self.bin_data, self.jbase + i * 8)
+        w = struct.unpack_from("<4f", self.bin_data, self.wbase + i * 16)
+        return self.jname[j1], self.jname[j2], w
+
+    def test_blend_only_with_adjacent_chain_joints(self):
+        """보조 웨이트는 지배 조인트의 부모/자식하고만 허용 — 특히 팔↔다리
+        블렌드(손이 다리에 앵커링돼 웨빙되는 주범)는 0이어야 한다."""
+        parent = {}
+        for i, nd in enumerate(self.gltf["nodes"]):
+            for c in nd.get("children", []):
+                parent[c] = i
+        arm = {"LeftArm", "LeftForeArm", "RightArm", "RightForeArm"}
+        leg = {"LeftUpLeg", "LeftLeg", "LeftFoot",
+               "RightUpLeg", "RightLeg", "RightFoot"}
+        for i in range(self.n_pts):
+            n1, n2, w = self._vert_joints(i)
+            if w[1] <= 0:
+                continue
+            i1, i2 = self.node_by_name[n1], self.node_by_name[n2]
+            self.assertTrue(parent.get(i1) == i2 or parent.get(i2) == i1,
+                            f"vertex {i}: non-adjacent blend {n1}<->{n2}")
+            self.assertFalse((n1 in arm and n2 in leg) or (n1 in leg and n2 in arm),
+                             f"vertex {i}: arm-leg blend {n1}<->{n2}")
+
+    def test_hand_cluster_dominated_by_forearm(self):
+        """굽은 팔 끝 손 클러스터는 허벅지가 아니라 ForeArm이 지배해야 한다
+        (2-pass 팁 실측 보정 인변량)."""
+        for label, side in (("L", "Left"), ("R", "Right")):
+            for i in self.hand_idx[label]:
+                n1, _, _ = self._vert_joints(i)
+                self.assertEqual(n1, side + "ForeArm",
+                                 f"hand vertex {i} dominated by {n1}")
+
+    def test_forearm_delta_measured_from_mesh(self):
+        """전완 rest-delta는 상완 연속 가정이 아니라 메시 실측 방향이어야
+        한다 — 픽스처 전완은 아래+앞+안쪽으로 굽어 있고 좌우 미러다."""
+        dirs = worker._mesh_forearm_dirs(
+            self.gltf, self.bin_data,
+            worker._rig_rest_world(self.gltf, self.node_by_name))
+        self.assertEqual(set(dirs), {"Left", "Right"})
+        for side, sx in (("Left", 1.0), ("Right", -1.0)):
+            v = dirs[side]
+            self.assertLess(v[0] * sx, 0.0, f"{side} forearm must point inward")
+            self.assertLess(v[1], -0.5, f"{side} forearm must point down")
+            self.assertGreater(v[2], 0.2, f"{side} forearm must point forward")
+        deltas, dparents = worker._arm_rest_deltas(
+            self.gltf, self.bin_data, self.node_by_name)
+        for side in ("Left", "Right"):
+            da, df = deltas[side + "Arm"], deltas[side + "ForeArm"]
+            self.assertTrue(any(abs(da[k] - df[k]) > 1e-3 for k in range(4)),
+                            f"{side}: ForeArm delta must differ from Arm delta")
+            self.assertEqual(dparents[side + "ForeArm"], da)
+
+
 class AutoRigTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-autorig-")
