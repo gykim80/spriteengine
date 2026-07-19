@@ -78,17 +78,27 @@ def check_export(ws):
     return sorted(set(issues))
 
 
-def check_rig(ws):
-    rig = ws / "rig" / "character-rigged.glb"
-    if not rig.exists():
-        return ["no character-rigged.glb"]
-    rep = validate_character.validate(str(rig))
+def _validate_glb(path):
+    if not path.exists():
+        return [f"no {path.name}"]
+    rep = validate_character.validate(str(path))
     return [k for k, v in rep.items() if isinstance(v, dict) and not v.get("ok", True)]
+
+
+def check_rig(ws):
+    return _validate_glb(ws / "rig" / "character-rigged.glb")
+
+
+def check_animated(ws):
+    """모션 베이킹 산출물 검증 — rig 통과 후 bake 단계에서 생긴 변형 붕괴를 잡는다."""
+    return _validate_glb(ws / "motion" / "character-animated.glb")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rig", action="store_true", help="rig 전체 게이트까지 검사")
+    ap.add_argument("--animated", action="store_true",
+                    help="모션 베이킹 GLB 게이트까지 검사")
     args = ap.parse_args()
 
     jobs = load_jobs()
@@ -101,6 +111,8 @@ def main():
             issues += check_export(ws)
         if args.rig:
             issues += [f"rig:{k}" for k in check_rig(ws)]
+        if args.animated:
+            issues += [f"animated:{k}" for k in check_animated(ws)]
         if issues:
             failures[name] = issues
         print(f"{name:26s} {'PASS' if not issues else 'FAIL ' + '; '.join(issues)}",
