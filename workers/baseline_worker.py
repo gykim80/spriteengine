@@ -251,10 +251,37 @@ def _classify_body_type(all_pos):
 
     직립 캐릭터는 키(Y)가, 4족 동물은 체장(Z)이 코어 최장축이다.
     _bake_mesh_node_transform() 이후(Y축=수직 보장) 좌표를 전제로 한다.
+
+    체장>키만으로는 "누워서 복원된 휴머노이드"(Hunyuan3D 실패 사례:
+    barbarian/cowboy)가 4족으로 오분류돼 upright 게이트를 우회한다. 그래서
+    4족 확증 조건을 더한다 — 서 있는 4족은 다리 4기둥만 지면에 닿아 지면
+    근접 버텍스가 앞/뒤 두 클러스터로 갈리고 그 사이(배 밑)는 비지만, 누운
+    몸통은 등/배가 전장에 걸쳐 연속으로 지면에 닿는다. 확증 실패 시
+    humanoid로 두어 기존 upright 검사(누움 검출)가 잡아내게 한다.
     """
     cy = _core_extent([p[1] for p in all_pos]) or 1e-9
     cz = _core_extent([p[2] for p in all_pos])
-    return "quadruped" if cz > QUADRUPED_LENGTH_RATIO * cy else "humanoid"
+    if cz <= QUADRUPED_LENGTH_RATIO * cy:
+        return "humanoid"
+    ys = [p[1] for p in all_pos]
+    zs = [p[2] for p in all_pos]
+    min_y, h = min(ys), (max(ys) - min(ys)) or 1.0
+    zc = (min(zs) + max(zs)) / 2
+    length = (max(zs) - min(zs)) or 1.0
+    ground = [p for p in all_pos if p[1] < min_y + 0.15 * h]  # 지면 근접(발/접지면)
+    front = sorted(p[2] for p in ground if p[2] >= zc)
+    rear = sorted(p[2] for p in ground if p[2] < zc)
+    if not front or not rear:
+        return "humanoid"  # 접지가 한쪽뿐 — 4족 자세가 아님
+    front_med, rear_med = front[len(front) // 2], rear[len(rear) // 2]
+    span = front_med - rear_med
+    if span < 0.25 * length:
+        return "humanoid"  # 앞/뒤 접지 클러스터가 충분히 벌어지지 않음
+    # 배 밑 갭: 두 클러스터 중앙값 사이 가운데 40% 밴드에 접지 버텍스가
+    # 거의 없어야 한다 (누운 몸통은 이 밴드가 접지 버텍스로 채워진다).
+    lo, hi = rear_med + 0.3 * span, rear_med + 0.7 * span
+    belly = sum(1 for p in ground if lo <= p[2] <= hi)
+    return "quadruped" if belly <= 0.1 * len(ground) else "humanoid"
 
 
 def _normalize_character_scale(gltf, bin_data, body_type="humanoid"):

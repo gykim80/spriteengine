@@ -561,6 +561,14 @@ class QuadrupedRigTest(unittest.TestCase):
         box = [(x, y, z) for x in (-0.3, 0.3) for y in (0.0, 1.8) for z in (-0.3, 0.3)]
         self.assertEqual(worker._classify_body_type(box), "humanoid")
 
+    def test_classifier_rejects_lying_humanoid(self):
+        """누워서 복원된 휴머노이드(barbarian/cowboy 실패 사례)는 체장>키라도
+        4족으로 오분류되면 안 된다 — 몸통이 전장에 걸쳐 지면에 닿아 배 밑
+        갭이 없으므로 humanoid 유지 → 기존 upright 게이트가 누움을 잡는다."""
+        lying = [(x, y, round(0.1 * i - 0.9, 2))
+                 for i in range(19) for x in (-0.3, 0.3) for y in (0.0, 0.3)]
+        self.assertEqual(worker._classify_body_type(lying), "humanoid")
+
     def test_skin_marker_and_tail(self):
         self.assertEqual(self.skin["name"], "AutoQuadrupedRig")
         self.assertIn("Tail", self.jname)   # 꼬리 버텍스가 있으므로 Tail 조인트 생성
