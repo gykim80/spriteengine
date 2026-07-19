@@ -86,6 +86,7 @@ CHARACTERS_QUADRUPED = {
     "dog":   "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
     "dog2":  "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
     "dog3":  "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
+    "dog4":  "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
     "horse": "a sturdy brown horse with a dark mane and tail",
     "cat":   "a gray tabby cat with a long straight tail",
 }
