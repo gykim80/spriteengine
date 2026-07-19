@@ -203,7 +203,7 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
       {preview && thumbs[preview.id] && (
         <div className="lightbox" role="dialog" aria-modal="true" aria-label={`${preview.name} original image`}
           onClick={() => setPreview(null)}>
-          <button className="lightbox-close" aria-label="Close preview" onClick={() => setPreview(null)}><X /></button>
+          <button className="lightbox-close" autoFocus aria-label="Close preview" onClick={() => setPreview(null)}><X /></button>
           <figure onClick={e => e.stopPropagation()}>
             <img src={thumbs[preview.id]} alt={`${preview.name} 원본 참조 이미지`} />
             <figcaption>{preview.name} · 원본 참조 이미지</figcaption>
