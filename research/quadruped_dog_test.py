@@ -11,6 +11,8 @@
   2. auto_rig() 실행 → 체형 판별·조인트 월드 배치를 개 해부학과 대조
   3. 부위별(앞다리/뒷다리/머리/꼬리/몸통) 지배 조인트 분포 실측
   4. 합성 걷기 클립 리타겟(bake_animation) 후 validate_character 게이트 실행
+  5. 방향 강건성: 역방향(−Z)·측방향(±X) 복원 메시도 자동 정렬·플립 후
+     같은 파이프라인(리깅→보행→게이트)을 통과하고 머리가 +Z를 향하는지 확인
 
 종료 코드: 게이트 PASS면 0, 아니면 1.
 사용법: python3 research/quadruped_dog_test.py
@@ -229,6 +231,53 @@ if sk.get("edge_stretch_p99") is not None:
     print(f"      (엣지 신장률 p99={sk['edge_stretch_p99']}, max={sk['edge_stretch_max']}, "
           f"한계 {validator.MAX_EDGE_STRETCH_P99})")
 
+# --- 6. 방향 강건성: 역방향·측방향 복원도 자동 보정되는가 ---------------------
+# 실제 복원 메시는 진행 방향이 보장되지 않는다 — 자동 정렬(yaw 90°)과
+# 머리 방향 플립(yaw 180°)을 거쳐 최종적으로 머리가 +Z를 향해야 보행
+# 리타겟(+Z 전진)이 앞으로 걷는다.
+print("\n[6] 방향 강건성 (자동 정렬·플립 → 리깅 → 보행 → 게이트):")
+
+
+def build_glb(pts, path):
+    bd = bytearray()
+    g = {"asset": {"version": "2.0", "generator": "quadruped-dog-test"},
+         "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": "Dog", "mesh": 0}],
+         "buffers": [{"byteLength": 0}], "bufferViews": [], "accessors": []}
+    pvv = worker._append_view(g, bd, b"".join(struct.pack("<fff", *p) for p in pts))
+    g["accessors"].append({"bufferView": pvv, "componentType": 5126,
+                           "count": len(pts), "type": "VEC3"})
+    ivv = worker._append_view(g, bd, idx_blob)
+    g["accessors"].append({"bufferView": ivv, "componentType": 5123,
+                           "count": len(indices), "type": "SCALAR"})
+    g["meshes"] = [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}]
+    worker._write_glb(g, bd, path)
+
+
+ORIENTS = [  # (라벨, 원본→복원 좌표 변환)
+    ("역방향(−Z)", lambda x, y, z: (-x, y, -z)),
+    ("측방향(+X)", lambda x, y, z: (z, y, -x)),
+    ("측+역방향(−X)", lambda x, y, z: (-z, y, x)),
+]
+orient_ok = True
+for oi, (label, fn) in enumerate(ORIENTS):
+    src = os.path.join(OUT, f"dog-orient{oi}.glb")
+    rig2 = os.path.join(OUT, f"dog-orient{oi}-rigged.glb")
+    anim2 = os.path.join(OUT, f"dog-orient{oi}-animated.glb")
+    build_glb([fn(*p) for p in positions], src)
+    bt = worker.auto_rig(src, rig2)
+    baked2 = worker.bake_animation(rig2, payload, anim2) if bt else 0
+    rep2 = validator.validate(anim2) if baked2 else {"ok": False}
+    g3, b3 = worker._read_glb(rig2)
+    pos3 = worker._read_vec3(
+        g3, b3, g3["meshes"][0]["primitives"][0]["attributes"]["POSITION"], "POSITION")
+    head_z = [pos3[k][2] for k, pt in enumerate(part_of) if pt == "head"]
+    facing = bool(head_z) and min(head_z) > 0
+    passed = bt == "quadruped" and baked2 and rep2["ok"] and facing
+    orient_ok = orient_ok and passed
+    print(f"      {label:11s} → rig={bt}, 걷기 {baked2}클립, "
+          f"게이트 {'PASS' if rep2['ok'] else 'FAIL'}, "
+          f"머리 {'+Z 정면 보정됨' if facing else '방향 오류!'}")
+
 print("\n산출물:", OUT)
-if not (ok and baked and report["ok"] and skin_name == "AutoQuadrupedRig"):
+if not (ok and baked and report["ok"] and skin_name == "AutoQuadrupedRig" and orient_ok):
     sys.exit(1)
