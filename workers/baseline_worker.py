@@ -604,6 +604,12 @@ def auto_rig(glb_path, output_path):
     if body_type == "quadruped":
         JDEF, BONE_CHILD, tips = _quadruped_joint_layout(all_pos)
     else:
+        # 팔을 벌린 전체 bbox 폭(w)을 어깨 폭으로 직접 사용하면 손끝 폭의 60%가
+        # 어깨 폭이 되어 비정상적인 역삼각 체형이 된다. 인체 어깨 관절 간격은
+        # 신장의 약 22~32%이므로, 손끝 폭 기반 추정치를 신장 28%로 상한한다.
+        # 팔꿈치는 기존 bbox 추정치를 유지하되 어깨보다 바깥에 있도록 보장한다.
+        shoulder_half = min(w * .30, h * .14)
+        elbow_half = max(shoulder_half + h * .10, min(w * .44, h * .32))
         JDEF = [
             ("Hips",         (cx,          min_y + h*.52, cz), None),
             ("Spine",        (cx,          min_y + h*.62, cz), "Hips"),
@@ -615,10 +621,10 @@ def auto_rig(glb_path, output_path):
             ("RightUpLeg",   (cx - w*.13,  min_y + h*.48, cz), "Hips"),
             ("RightLeg",     (cx - w*.13,  min_y + h*.27, cz), "RightUpLeg"),
             ("RightFoot",    (cx - w*.13,  min_y + h*.04, cz), "RightLeg"),
-            ("LeftArm",      (cx + w*.30,  min_y + h*.73, cz), "Chest"),
-            ("LeftForeArm",  (cx + w*.44,  min_y + h*.62, cz), "LeftArm"),
-            ("RightArm",     (cx - w*.30,  min_y + h*.73, cz), "Chest"),
-            ("RightForeArm", (cx - w*.44,  min_y + h*.62, cz), "RightArm"),
+            ("LeftArm",      (cx + shoulder_half, min_y + h*.73, cz), "Chest"),
+            ("LeftForeArm",  (cx + elbow_half,    min_y + h*.62, cz), "LeftArm"),
+            ("RightArm",     (cx - shoulder_half, min_y + h*.73, cz), "Chest"),
+            ("RightForeArm", (cx - elbow_half,    min_y + h*.62, cz), "RightArm"),
         ]
     JNAMES = [j[0] for j in JDEF]
     JWORLD = {j[0]: j[1] for j in JDEF}
@@ -1285,8 +1291,8 @@ def run(req):
                 metrics["renderValid"] = check["ok"]
                 if not check["ok"]:
                     issues = [i for sec in ("upright", "hierarchy", "legs", "deformation",
-                                            "arm_pose", "skinning")
-                              for i in check[sec]["issues"]]
+                                            "arm_pose", "skinning", "hands")
+                              for i in check.get(sec, {}).get("issues", [])]
                     metrics["renderIssues"] = issues
                     raise RuntimeError(f"{stage} render validation failed: " + "; ".join(issues))
         kinds = {"retopo":"clean-mesh", "rig":"rigged-model", "motion":"animated-model", "export":"package"}

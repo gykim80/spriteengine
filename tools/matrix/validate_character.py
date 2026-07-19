@@ -157,6 +157,35 @@ def check_hierarchy(gltf):
     for left, right in EXPECTED_LEFT_RIGHT_PAIRS:
         if (left in name_set) != (right in name_set):
             issues.append(f"asymmetric skeleton: {left} in={left in name_set} {right} in={right in name_set}")
+    # 휴머노이드 비례 게이트: 팔을 벌린 전체 mesh bbox를 어깨 폭으로 오인하면
+    # Arm 조인트 간격이 신장의 절반 이상이 되는 회귀를 수치로 차단한다.
+    # 성인/스타일라이즈드 캐릭터를 넉넉히 포괄하는 범위는 신장 대비 0.18~0.36.
+    if skin.get("name") != "AutoQuadrupedRig":
+        by_name = {gltf["nodes"][j].get("name"): j for j in joints}
+        if all(n in by_name for n in ("Hips", "Head", "LeftArm", "RightArm")):
+            parent = {}
+            for i, node in enumerate(gltf.get("nodes", [])):
+                for child in node.get("children", []):
+                    parent[child] = i
+
+            def rest_pos(idx):
+                p = [0.0, 0.0, 0.0]
+                seen_nodes = set()
+                while idx is not None and idx not in seen_nodes:
+                    seen_nodes.add(idx)
+                    t = gltf["nodes"][idx].get("translation", (0.0, 0.0, 0.0))
+                    p = [p[k] + t[k] for k in range(3)]
+                    idx = parent.get(idx)
+                return p
+
+            left = rest_pos(by_name["LeftArm"]); right = rest_pos(by_name["RightArm"])
+            hips = rest_pos(by_name["Hips"]); head = rest_pos(by_name["Head"])
+            shoulder_width = math.sqrt(sum((left[k] - right[k]) ** 2 for k in range(3)))
+            torso_height = abs(head[1] - hips[1])
+            ratio = shoulder_width / torso_height if torso_height > 1e-8 else float("inf")
+            if not 0.35 <= ratio <= 0.90:
+                issues.append(f"implausible shoulder rig width: shoulder/hips-to-head ratio {ratio:.3f} "
+                              f"(expected 0.35..0.90) — full arm-span may have been mistaken for shoulder width")
     return {"ok": not issues, "issues": issues, "joint_count": len(joints),
             "root": names.get(roots[0]) if len(roots) == 1 else None}
 
@@ -261,26 +290,13 @@ def check_legs(gltf, bin_data):
     if len(pts) < 4:
         return {"ok": False, "issues": [f"only {len(pts)} ground-contact vertices — mesh does not reach the ground"]}
     radius = LEG_CLUSTER_RADIUS * max(max(xs) - min(xs), max(zs) - min(zs))
-    r2 = radius * radius
-    unvisited = set(range(len(pts)))
-    clusters = []
-    while unvisited:
-        seed = unvisited.pop()
-        comp = [seed]; frontier = [seed]
-        while frontier:
-            i = frontier.pop()
-            near = [j for j in unvisited
-                    if (pts[i][0] - pts[j][0]) ** 2 + (pts[i][1] - pts[j][1]) ** 2 <= r2]
-            unvisited -= set(near)
-            comp.extend(near); frontier.extend(near)
-        clusters.append(comp)
     sig_min = max(3, len(pts) // 50)
     legs = []
-    for comp in clusters:
+    for comp in _cluster_xz(pts, radius):
         if len(comp) < sig_min:
             continue
-        cx = sum(pts[i][0] for i in comp) / len(comp)
-        cz = sum(pts[i][1] for i in comp) / len(comp)
+        cx = sum(p[0] for p in comp) / len(comp)
+        cz = sum(p[1] for p in comp) / len(comp)
         legs.append({"verts": len(comp), "x": round(cx, 3), "z": round(cz, 3)})
     issues = []
     quadrants = {(leg["x"] > xc, leg["z"] > zc) for leg in legs}
@@ -298,6 +314,114 @@ def check_legs(gltf, bin_data):
             issues.append(f"degenerate thin leg(s) {thin} — vertex mass under {LEG_MIN_MASS_RATIO:.0%} "
                           f"of median leg ({median}), occluded-side leg poorly reconstructed")
     return {"ok": not issues, "issues": issues, "legs": legs, "ground_verts": len(pts)}
+
+
+def _cluster_xz(pts, radius):
+    """XZ 평면 반경 클러스터링 — [(x,z), ...] → 클러스터별 점 리스트."""
+    r2 = radius * radius
+    unvisited = set(range(len(pts)))
+    comps = []
+    while unvisited:
+        seed = unvisited.pop()
+        comp = [seed]; frontier = [seed]
+        while frontier:
+            i = frontier.pop()
+            near = [j for j in unvisited
+                    if (pts[i][0] - pts[j][0]) ** 2 + (pts[i][1] - pts[j][1]) ** 2 <= r2]
+            unvisited -= set(near)
+            comp.extend(near); frontier.extend(near)
+        comps.append([pts[i] for i in comp])
+    return comps
+
+
+# 단일 이미지 복원은 가려진 쪽 다리를 웹(막)/융합 형태로 환각하기 쉽다
+# (실측: 3/4 시점 시바견 → 앞다리쌍이 30% 높이에서 웹으로 붙음). 절대
+# 임계값으로는 양불 판정이 어려우므로, 시드별 복원 후보를 상대 비교해
+# 최적을 고르는 점수를 제공한다.
+LEG_SEP_BAND = 0.05      # pair separation 스캔 밴드 높이 (h 비율)
+LEG_SEP_SCAN_TOP = 0.5   # 지면에서 50% 높이까지만 스캔
+
+
+def leg_quality(glb_path):
+    """4족 복원 후보의 다리 품질 점수 (상대 비교용, 높을수록 좋음).
+
+    리깅 전 원시 메시에도 동작한다(방향 정규화 전이므로 몸 길이 축을
+    수평 범위가 더 긴 축으로 자동 판정).
+      - 접지 다리 기둥 4개 미만 또는 4사분면 미커버 → score=-1.0 (실격)
+      - score = front_sep + rear_sep + 0.5 * balance
+        · pair separation: 전/후 다리쌍의 좌/우가 별도 기둥으로 유지되는
+          최대 높이 비율 — 웹/융합으로 뭉개진 복원은 낮은 높이에서 붙는다
+        · balance: 접지 기둥 질량 min/median — 퇴화 다리가 있으면 낮다
+    """
+    gltf, bin_data = worker._read_glb(glb_path)
+    all_pos = []
+    for node in gltf.get("nodes", []):
+        if "mesh" not in node:
+            continue
+        # 원시 Hunyuan 복원은 Z-up 정점 + 노드 회전(+90° X)으로 Y-up을 만든다.
+        # 스킨 메시는 glTF 스펙상 노드 TRS가 무시되므로 비스킨 노드에만 적용.
+        rot = node.get("rotation") if "skin" not in node else None
+        scale = node.get("scale") if "skin" not in node else None
+        trans = node.get("translation") if "skin" not in node else None
+        for prim in gltf["meshes"][node["mesh"]].get("primitives", []):
+            pid = prim.get("attributes", {}).get("POSITION")
+            if pid is None:
+                continue
+            for p in worker._read_vec3(gltf, bin_data, pid, "POSITION"):
+                if scale:
+                    p = (p[0] * scale[0], p[1] * scale[1], p[2] * scale[2])
+                if rot and not worker._quat_is_identity(rot):
+                    p = worker._quat_rotate_vec3(rot, p)
+                if trans:
+                    p = (p[0] + trans[0], p[1] + trans[1], p[2] + trans[2])
+                all_pos.append(p)
+    if not all_pos:
+        return {"score": -1.0, "reason": "no mesh POSITION data"}
+    xs = [p[0] for p in all_pos]; ys = [p[1] for p in all_pos]; zs = [p[2] for p in all_pos]
+    min_y = min(ys); h = (max(ys) - min_y) or 1e-9
+    xc = (max(xs) + min(xs)) / 2.0; zc = (max(zs) + min(zs)) / 2.0
+    radius = LEG_CLUSTER_RADIUS * max(max(xs) - min(xs), max(zs) - min(zs))
+
+    # 1) 접지 기둥 — check_legs와 동일 기준 (pts는 (x, z)로 저장)
+    ground = [(p[0], p[2]) for p in all_pos if p[1] < min_y + LEG_GROUND_BAND * h]
+    step = max(1, len(ground) // LEG_SAMPLE_MAX)
+    ground = ground[::step]
+    if len(ground) < 4:
+        return {"score": -1.0, "reason": "mesh does not reach the ground"}
+    cols = [c for c in _cluster_xz(ground, radius)
+            if len(c) >= max(3, len(ground) // 50)]
+    quadrants = {(sum(p[0] for p in c) / len(c) > xc, sum(p[1] for p in c) / len(c) > zc)
+                 for c in cols}
+    if len(cols) < 4 or len(quadrants) < 4:
+        return {"score": -1.0, "columns": len(cols), "quadrants": len(quadrants),
+                "reason": "missing/merged ground leg columns"}
+    masses = sorted(len(c) for c in cols)
+    balance = masses[0] / masses[len(masses) // 2]
+
+    # 2) pair separation — 몸 길이 축(수평 범위가 긴 축)으로 전/후를 나눈다
+    li, lc = ((1, zc) if (max(zs) - min(zs)) >= (max(xs) - min(xs)) else (0, xc))
+    sep = {}
+    for front, key in ((True, "front"), (False, "rear")):
+        top = 0.0
+        for band in range(int(LEG_SEP_SCAN_TOP / LEG_SEP_BAND)):
+            y0 = min_y + h * LEG_SEP_BAND * band
+            y1 = min_y + h * LEG_SEP_BAND * (band + 1)
+            pts = [(p[0], p[2]) for p in all_pos
+                   if y0 <= p[1] < y1 and ((p[2] if li == 1 else p[0]) > lc) == front]
+            stp = max(1, len(pts) // 300)
+            pts = pts[::stp]
+            if len(pts) < 6:
+                continue  # 데이터가 희소한 밴드는 판단 보류 (합성 픽스처 대응)
+            sig = max(2, len(pts) // 30)
+            n = sum(1 for c in _cluster_xz(pts, radius) if len(c) >= sig)
+            if n >= 2:
+                top = LEG_SEP_BAND * (band + 1)
+            elif band >= 1:
+                break  # 다리가 붙기 시작한 높이 위쪽은 스캔 불필요
+        sep[key] = round(top, 3)
+    score = sep["front"] + sep["rear"] + 0.5 * balance
+    return {"score": round(score, 3), "columns": len(cols), "quadrants": len(quadrants),
+            "balance": round(balance, 3), "front_sep": sep["front"], "rear_sep": sep["rear"]}
 
 
 # 팔 elevation 중앙값 상한(°): 정상 모션 셋은 팔이 대부분 매달림(−60~−85°)이고
@@ -530,6 +654,66 @@ def check_skinning(gltf, bin_data):
             "edges_sampled": len(rest_len)}
 
 
+# 손 품질/리깅 게이트. 현재 14-joint rig에는 Hand joint가 없으므로 손 형상은
+# 전완 지배 버텍스의 말단 클러스터로 평가한다. 좌우 손이 모두 존재하고,
+# hand cluster가 충분한 vertex mass/3D thickness를 가지며 ForeArm에 지배되어야 한다.
+HAND_MIN_VERTICES = 6
+HAND_MIN_THICKNESS_HEIGHT = 0.006
+
+
+def check_hands(gltf, bin_data):
+    if _rig_type(gltf) != "humanoid":
+        return {"ok": True, "issues": [], "note": "quadruped rig — hand check skipped"}
+    skins = gltf.get("skins") or []
+    if not skins:
+        return {"ok": False, "issues": ["no skin present"]}
+    skin = skins[0]; joints = skin.get("joints") or []
+    names = [gltf["nodes"][j].get("name") for j in joints]
+    prim = next((p for m in gltf.get("meshes", []) for p in m.get("primitives", [])
+                 if "JOINTS_0" in p.get("attributes", {}) and "WEIGHTS_0" in p.get("attributes", {})), None)
+    if prim is None:
+        return {"ok": False, "issues": ["no skinned primitive for hand validation"]}
+    attrs = prim["attributes"]
+    pos = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+    # 극저해상도 placeholder/단위 테스트 mesh는 손 자체를 표현할 topology가 없다.
+    # 실제 reconstruction 품질 게이트(수천~수만 vertices)에만 형상 판정을 적용한다.
+    if len(pos) < 100:
+        return {"ok": True, "issues": [], "note": f"only {len(pos)} vertices — hand geometry check skipped"}
+    vj = _read_accessor_uints(gltf, bin_data, attrs["JOINTS_0"], 4)
+    vw = _read_accessor_floats(gltf, bin_data, attrs["WEIGHTS_0"], 4)
+    ys = [p[1] for p in pos]; height = (max(ys) - min(ys)) or 1.0
+    node_by_name = {n.get("name"): i for i, n in enumerate(gltf.get("nodes", []))}
+    world = worker._rig_rest_world(gltf, node_by_name)
+    issues, details = [], {}
+    for side in ("Left", "Right"):
+        name = side + "ForeArm"
+        if name not in names or name not in world:
+            issues.append(f"{name} missing — hand cannot be rigged")
+            continue
+        ji = names.index(name); origin = world[name]
+        dominated = []
+        for i, p in enumerate(pos):
+            slot = max(range(4), key=lambda s: vw[i][s])
+            if vj[i][slot] == ji:
+                dominated.append(p)
+        # ForeArm origin에서 가장 먼 20%를 손 말단으로 간주한다.
+        dominated.sort(key=lambda p: -sum((p[k] - origin[k]) ** 2 for k in range(3)))
+        hand = dominated[:max(HAND_MIN_VERTICES, len(dominated) // 5)] if dominated else []
+        if len(hand) < HAND_MIN_VERTICES:
+            issues.append(f"{side} hand has only {len(hand)} ForeArm-dominated vertices "
+                          f"(expected >= {HAND_MIN_VERTICES}) — hand may be missing/fused")
+            details[side.lower()] = {"vertices": len(hand)}
+            continue
+        ext = [max(p[k] for p in hand) - min(p[k] for p in hand) for k in range(3)]
+        thickness = sorted(ext)[0] / height
+        details[side.lower()] = {"vertices": len(hand), "extents": [round(x, 4) for x in ext],
+                                 "min_extent_height_ratio": round(thickness, 4)}
+        if thickness < HAND_MIN_THICKNESS_HEIGHT:
+            issues.append(f"{side} hand is nearly flat: min extent/height {thickness:.4f} "
+                          f"(expected >= {HAND_MIN_THICKNESS_HEIGHT}) — malformed hand geometry")
+    return {"ok": not issues, "issues": issues, "hands": details}
+
+
 def validate(glb_path):
     gltf, bin_data = worker._read_glb(glb_path)
     upright = check_upright(gltf, bin_data)
@@ -538,11 +722,12 @@ def validate(glb_path):
     deformation = check_deformation(gltf, bin_data)
     arm_pose = check_arm_pose(gltf, bin_data)
     skinning = check_skinning(gltf, bin_data)
+    hands = check_hands(gltf, bin_data)
     ok = (upright["ok"] and hierarchy["ok"] and legs["ok"] and deformation["ok"]
-          and arm_pose["ok"] and skinning["ok"])
+          and arm_pose["ok"] and skinning["ok"] and hands["ok"])
     return {"path": glb_path, "ok": ok, "upright": upright,
             "hierarchy": hierarchy, "legs": legs, "deformation": deformation,
-            "arm_pose": arm_pose, "skinning": skinning}
+            "arm_pose": arm_pose, "skinning": skinning, "hands": hands}
 
 
 def main():
@@ -556,7 +741,7 @@ def main():
     else:
         status = "PASS" if report["ok"] else "FAIL"
         print(f"[{status}] {args.glb}")
-        for section in ("upright", "hierarchy", "legs", "deformation", "arm_pose", "skinning"):
+        for section in ("upright", "hierarchy", "legs", "deformation", "arm_pose", "skinning", "hands"):
             r = report[section]
             print(f"  {section}: {'ok' if r['ok'] else 'FAIL'}")
             for issue in r.get("issues", []):

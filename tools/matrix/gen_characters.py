@@ -73,6 +73,9 @@ CHARACTERS = {
 TEMPLATE = ("Full body 3D game character concept art of {desc}. Single character, "
             "standing straight in a relaxed A-pose with arms slightly away from the body, "
             "facing the camera directly, feet visible, whole body in frame. "
+            "Natural human anatomy with moderate shoulder width, relaxed sloping shoulders, "
+            "anatomically correct separated hands, five clearly formed fingers on each hand, "
+            "palms angled slightly toward the thighs, no clenched fists, no fused fingers. "
             "Stylized PBR game-asset look, clean plain light gray studio background, "
             "soft even lighting, no shadows on background, no text, no watermark.")
 
@@ -82,6 +85,7 @@ TEMPLATE = ("Full body 3D game character concept art of {desc}. Single character
 CHARACTERS_QUADRUPED = {
     "dog":   "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
     "dog2":  "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
+    "dog3":  "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
     "horse": "a sturdy brown horse with a dark mane and tail",
     "cat":   "a gray tabby cat with a long straight tail",
 }

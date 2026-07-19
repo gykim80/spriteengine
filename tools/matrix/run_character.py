@@ -81,28 +81,59 @@ def ensure_image(name, desc, char_set):
     return png
 
 
-def reconstruct(name, png):
+# 4족은 단일 이미지 복원이 가려진 쪽 다리를 웹/융합으로 환각하기 쉬우므로
+# (실측: 3/4 시점 시바견 → 앞다리 웹), 시드 여러 개로 병렬 복원해
+# leg_quality 점수가 가장 높은 후보를 자동 선택한다.
+RECON_SEEDS = (1234, 5678, 9012)
+
+
+def reconstruct(name, png, quadruped=False):
     ws = mp.WS / name
     out = ws / "reconstruct" / "hunyuan3d21.glb"
     if out.exists():
         print(f"[recon] {name}: exists, skip", flush=True)
         return out
-    payload = {"input": {
-        "image": base64.b64encode(png.read_bytes()).decode(), "seed": 1234,
-        "steps": 30, "guidance_scale": 5.0, "octree_resolution": 256,
-        "face_count": 40000, "texture": True, "max_num_view": 6,
-        "texture_resolution": 512,
-    }}
-    job = mp.rp("POST", "run", payload, timeout=120)
-    print(f"[recon] {name}: submitted {job['id']}", flush=True)
-    result = mp.poll({name: job["id"]})[name]
-    if not result or not result.get("glb_base64"):
-        sys.exit(f"[recon] {name}: FAILED {str((result or {}).get('error'))[:300]}")
-    glb = base64.b64decode(result["glb_base64"])
-    assert glb[:4] == b"glTF"
+    seeds = RECON_SEEDS if quadruped else RECON_SEEDS[:1]
+    jobs = {}
+    for seed in seeds:
+        payload = {"input": {
+            "image": base64.b64encode(png.read_bytes()).decode(), "seed": seed,
+            "steps": 30, "guidance_scale": 5.0, "octree_resolution": 256,
+            "face_count": 40000, "texture": True, "max_num_view": 6,
+            "texture_resolution": 512,
+        }}
+        job = mp.rp("POST", "run", payload, timeout=120)
+        jobs[f"{name}-s{seed}"] = job["id"]
+        print(f"[recon] {name}: submitted seed={seed} {job['id']}", flush=True)
+    results = mp.poll(jobs)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(glb)
-    print(f"[recon] {name}: {len(glb)} bytes textured={result.get('textured')}", flush=True)
+    candidates = []
+    for seed in seeds:
+        result = results.get(f"{name}-s{seed}")
+        if not result or not result.get("glb_base64"):
+            print(f"[recon] {name}: seed={seed} FAILED {str((result or {}).get('error'))[:200]}", flush=True)
+            continue
+        glb = base64.b64decode(result["glb_base64"])
+        assert glb[:4] == b"glTF"
+        cand = out.parent / f"candidate-s{seed}.glb"
+        cand.write_bytes(glb)
+        score = 0.0
+        if quadruped:
+            q = validate_character.leg_quality(str(cand))
+            score = q["score"]
+            print(f"[recon] {name}: seed={seed} {len(glb)} bytes leg_quality={q}", flush=True)
+        else:
+            print(f"[recon] {name}: seed={seed} {len(glb)} bytes textured={result.get('textured')}", flush=True)
+        candidates.append((score, seed, cand))
+    if not candidates:
+        sys.exit(f"[recon] {name}: all reconstruction seeds FAILED")
+    best_score, best_seed, best = max(candidates)
+    if quadruped and best_score < 0:
+        sys.exit(f"[recon] {name}: no candidate reconstructed 4 sound leg columns "
+                 f"— regenerate the source image and retry")
+    out.write_bytes(best.read_bytes())
+    if quadruped:
+        print(f"[recon] {name}: selected seed={best_seed} (leg_quality score={best_score})", flush=True)
     return out
 
 
@@ -231,7 +262,7 @@ def main():
 
     mp.WS.mkdir(parents=True, exist_ok=True)
     png = ensure_image(args.name, desc, args.set)
-    recon_glb = reconstruct(args.name, png)
+    recon_glb = reconstruct(args.name, png, quadruped=(args.set == "q"))
     retopo_path, rig_path, body_type = retopo_and_rig(args.name, recon_glb)
     generate_motion(args.name)
     motion_path, animations, model = bake_and_validate(args.name, rig_path)
