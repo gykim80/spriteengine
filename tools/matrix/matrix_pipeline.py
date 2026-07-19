@@ -198,7 +198,8 @@ def stage_bake():
                             "render_issues": (check["upright"]["issues"]
                                               + check["hierarchy"]["issues"]
                                               + check["deformation"]["issues"]
-                                              + check["arm_pose"]["issues"])}
+                                              + check["arm_pose"]["issues"]
+                                              + check["skinning"]["issues"])}
             status = "OK" if check["ok"] else "RENDER-INVALID"
             print(f"[bake] {name}: {len(anims)} clips, channels={chans}, render={status}", flush=True)
             if not check["ok"]:

@@ -15,6 +15,9 @@
   5. arm_pose  — 좌우 명명이 SMPL/glTF 규약(+X=Left)인지, 그리고 클립들을
                  FK로 실측한 팔(Arm→ForeArm) elevation 중앙값이 아래를 향하는지
                  ("팔이 위로 꺾여 머리 옆에 붙음" 미러 리깅 버그 재발 탐지)
+  6. skinning  — 클립 프레임들을 실제 LBS(linear blend skinning)로 변형해
+                 메시 엣지 신장률을 실측 — 겨드랑이/팔-몸통 사이가 막(웨빙)처럼
+                 늘어나는 웨이트 배정 오류를 정량 탐지
 
 사용법:
   python3 validate_character.py <character.glb> [--json]
@@ -211,6 +214,48 @@ def check_deformation(gltf, bin_data):
 MAX_MEDIAN_ARM_ELEVATION_DEG = 30.0
 
 
+def _node_parents(gltf):
+    parent = {}
+    for i, n in enumerate(gltf.get("nodes", [])):
+        for c in n.get("children", []):
+            parent[c] = i
+    return parent
+
+
+def _anim_tracks(gltf, bin_data, anim):
+    """애니메이션 채널 → {node: {"rotation"/"translation": frames}}와 프레임 수."""
+    tracks = {}
+    for ch in anim.get("channels", []):
+        sampler = anim["samplers"][ch["sampler"]]
+        path = ch["target"].get("path")
+        if path not in ("rotation", "translation"):
+            continue
+        width = 4 if path == "rotation" else 3
+        tracks.setdefault(ch["target"].get("node"), {})[path] = \
+            _read_accessor_floats(gltf, bin_data, sampler["output"], width)
+    if not tracks:
+        return {}, 0
+    return tracks, min(len(v) for t in tracks.values() for v in t.values())
+
+
+def _fk_world(gltf, tracks, parent, idx, frame, memo):
+    """해당 프레임의 노드 월드 (쿼터니언, 위치) — 채널이 없으면 rest TRS 사용."""
+    if idx in memo:
+        return memo[idx]
+    node = gltf["nodes"][idx]
+    t = tracks.get(idx, {})
+    q = tuple(t["rotation"][frame]) if "rotation" in t else tuple(node.get("rotation", (0, 0, 0, 1)))
+    tr = tuple(t["translation"][frame]) if "translation" in t else tuple(node.get("translation", (0, 0, 0)))
+    p = parent.get(idx)
+    if p is None:
+        memo[idx] = (q, tr)
+    else:
+        pq, pp = _fk_world(gltf, tracks, parent, p, frame, memo)
+        rt = worker._quat_rotate_vec3(pq, tr)
+        memo[idx] = (worker._quat_mul(pq, q), tuple(pp[k] + rt[k] for k in range(3)))
+    return memo[idx]
+
+
 def check_arm_pose(gltf, bin_data):
     node_by_name = {n.get("name"): i for i, n in enumerate(gltf.get("nodes", []))}
     needed = ("Hips", "LeftArm", "LeftForeArm", "RightArm", "RightForeArm")
@@ -224,47 +269,17 @@ def check_arm_pose(gltf, bin_data):
         issues.append(f"rig left/right mirrored vs SMPL convention: LeftArm x={rest['LeftArm'][0]:.3f} "
                       f"RightArm x={rest['RightArm'][0]:.3f} (expected Left on +X)")
 
-    animations = gltf.get("animations") or []
-    parent = {}
-    for i, n in enumerate(gltf.get("nodes", [])):
-        for c in n.get("children", []):
-            parent[c] = i
+    parent = _node_parents(gltf)
     elevations = []
-    for anim in animations:
-        tracks = {}
-        for ch in anim.get("channels", []):
-            sampler = anim["samplers"][ch["sampler"]]
-            path = ch["target"].get("path")
-            if path not in ("rotation", "translation"):
-                continue
-            width = 4 if path == "rotation" else 3
-            tracks.setdefault(ch["target"].get("node"), {})[path] = \
-                _read_accessor_floats(gltf, bin_data, sampler["output"], width)
-        if not tracks:
+    for anim in gltf.get("animations") or []:
+        tracks, frames = _anim_tracks(gltf, bin_data, anim)
+        if not frames:
             continue
-        frames = min(len(v) for t in tracks.values() for v in t.values())
-
-        def world(idx, frame, memo):
-            if idx in memo:
-                return memo[idx]
-            node = gltf["nodes"][idx]
-            t = tracks.get(idx, {})
-            q = tuple(t["rotation"][frame]) if "rotation" in t else tuple(node.get("rotation", (0, 0, 0, 1)))
-            tr = tuple(t["translation"][frame]) if "translation" in t else tuple(node.get("translation", (0, 0, 0)))
-            p = parent.get(idx)
-            if p is None:
-                memo[idx] = (q, tr)
-            else:
-                pq, pp = world(p, frame, memo)
-                rt = worker._quat_rotate_vec3(pq, tr)
-                memo[idx] = (worker._quat_mul(pq, q), tuple(pp[k] + rt[k] for k in range(3)))
-            return memo[idx]
-
         for frame in sorted({0, frames // 4, frames // 2, 3 * frames // 4, frames - 1}):
             memo = {}
             for side in ("Left", "Right"):
-                a = world(node_by_name[side + "Arm"], frame, memo)[1]
-                f = world(node_by_name[side + "ForeArm"], frame, memo)[1]
+                a = _fk_world(gltf, tracks, parent, node_by_name[side + "Arm"], frame, memo)[1]
+                f = _fk_world(gltf, tracks, parent, node_by_name[side + "ForeArm"], frame, memo)[1]
                 v = [f[k] - a[k] for k in range(3)]
                 n = math.sqrt(sum(c * c for c in v))
                 if n > 1e-9:
@@ -281,15 +296,133 @@ def check_arm_pose(gltf, bin_data):
             "samples": len(elevations)}
 
 
+# 엣지 신장률 p99 상한: 웨빙(팔-몸통 사이 막) 버그는 반대편 본에 끌려간
+# 버텍스가 엣지를 수십 배로 늘인다. 25종 실측 캘리브레이션 — 정상(팔 방향
+# 수정 후) p99 분포 2.8~11.3, 미러 리깅 버그본은 22.8 — 15.0이면 정상 전부
+# 통과하면서 심각한 웨이트 붕괴를 잡는다 (경계 사례는 arm_pose 검사가 보완).
+MAX_EDGE_STRETCH_P99 = 15.0
+SKIN_EDGE_SAMPLES = 1500
+
+
+def _read_accessor_uints(gltf, bin_data, acc_index, comps):
+    acc = gltf["accessors"][acc_index]
+    view = gltf["bufferViews"][acc["bufferView"]]
+    base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    fmt = {5121: "B", 5123: "H", 5125: "I"}[acc["componentType"]]
+    size = struct.calcsize(fmt)
+    stride = view.get("byteStride", size * comps)
+    return [struct.unpack_from(f"<{comps}{fmt}", bin_data, base + i * stride)
+            for i in range(acc["count"])]
+
+
+def _quat_to_mat3(q):
+    x, y, z, w = q
+    return ((1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+            (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+            (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)))
+
+
+def check_skinning(gltf, bin_data):
+    skins = gltf.get("skins") or []
+    animations = gltf.get("animations") or []
+    if not skins or not animations:
+        return {"ok": True, "issues": [], "note": "no skin/animations to check"}
+    skin = skins[0]
+    joints = skin["joints"]
+    ibms = _read_accessor_floats(gltf, bin_data, skin["inverseBindMatrices"], 16)
+
+    prim = next((p for m in gltf.get("meshes", []) for p in m.get("primitives", [])
+                 if "JOINTS_0" in p.get("attributes", {})), None)
+    if prim is None or prim.get("indices") is None:
+        return {"ok": True, "issues": [], "note": "no skinned indexed primitive"}
+    attrs = prim["attributes"]
+    positions = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+    vjoints = _read_accessor_uints(gltf, bin_data, attrs["JOINTS_0"], 4)
+    vweights = _read_accessor_floats(gltf, bin_data, attrs["WEIGHTS_0"], 4)
+    indices = [i[0] for i in _read_accessor_uints(gltf, bin_data, prim["indices"], 1)]
+
+    # 삼각형 엣지 표본: 중복 제거 후 결정적 스트라이드로 최대 N개
+    edges = set()
+    for t in range(0, len(indices) - 2, 3):
+        a, b, c = indices[t:t + 3]
+        for e in ((a, b), (b, c), (c, a)):
+            edges.add((min(e), max(e)))
+    edges = sorted(edges)
+    step = max(1, len(edges) // SKIN_EDGE_SAMPLES)
+    edges = edges[::step][:SKIN_EDGE_SAMPLES]
+    rest_len = {}
+    for a, b in edges:
+        pa, pb = positions[a], positions[b]
+        d = math.sqrt(sum((pa[k] - pb[k]) ** 2 for k in range(3)))
+        if d > 1e-6:
+            rest_len[(a, b)] = d
+    verts = sorted({v for e in rest_len for v in e})
+    parent = _node_parents(gltf)
+
+    def skin_vertex(mats, vi):
+        out = [0.0, 0.0, 0.0]
+        for slot in range(4):
+            wgt = vweights[vi][slot]
+            if wgt <= 0.0:
+                continue
+            rot, trn = mats[vjoints[vi][slot]]
+            v = positions[vi]
+            for r in range(3):
+                out[r] += wgt * (rot[r][0] * v[0] + rot[r][1] * v[1] + rot[r][2] * v[2] + trn[r])
+        return out
+
+    stretches = []
+    worst = (0.0, None, None)  # (ratio, clip, edge)
+    for anim in animations:
+        tracks, frames = _anim_tracks(gltf, bin_data, anim)
+        if not frames:
+            continue
+        for frame in sorted({0, frames // 2, frames - 1}):
+            memo = {}
+            mats = {}
+            for ji, node in enumerate(joints):
+                q, p = _fk_world(gltf, tracks, parent, node, frame, memo)
+                rq = _quat_to_mat3(q)
+                m = ibms[ji]  # column-major: 회전 3x3 + 이동(12..14)
+                ia = ((m[0], m[4], m[8]), (m[1], m[5], m[9]), (m[2], m[6], m[10]))
+                ib = (m[12], m[13], m[14])
+                rot = tuple(tuple(sum(rq[r][k] * ia[k][c] for k in range(3)) for c in range(3))
+                            for r in range(3))
+                trn = tuple(sum(rq[r][k] * ib[k] for k in range(3)) + p[r] for r in range(3))
+                mats[ji] = (rot, trn)
+            deformed = {vi: skin_vertex(mats, vi) for vi in verts}
+            for (a, b), rl in rest_len.items():
+                da, db = deformed[a], deformed[b]
+                d = math.sqrt(sum((da[k] - db[k]) ** 2 for k in range(3)))
+                ratio = d / rl
+                stretches.append(ratio)
+                if ratio > worst[0]:
+                    worst = (ratio, anim.get("name"), (a, b))
+    issues = []
+    p99 = None
+    if stretches:
+        p99 = sorted(stretches)[min(len(stretches) - 1, int(len(stretches) * 0.99))]
+        if p99 > MAX_EDGE_STRETCH_P99:
+            issues.append(f"skinned edges over-stretched: p99 ratio {p99:.2f} (limit {MAX_EDGE_STRETCH_P99}) "
+                          f"worst {worst[0]:.2f} in clip {worst[1]!r} — webbing/weight assignment problem")
+    return {"ok": not issues, "issues": issues,
+            "edge_stretch_p99": None if p99 is None else round(p99, 3),
+            "edge_stretch_max": round(worst[0], 3) if stretches else None,
+            "worst_clip": worst[1], "edges_sampled": len(rest_len)}
+
+
 def validate(glb_path):
     gltf, bin_data = worker._read_glb(glb_path)
     upright = check_upright(gltf, bin_data)
     hierarchy = check_hierarchy(gltf)
     deformation = check_deformation(gltf, bin_data)
     arm_pose = check_arm_pose(gltf, bin_data)
-    ok = upright["ok"] and hierarchy["ok"] and deformation["ok"] and arm_pose["ok"]
+    skinning = check_skinning(gltf, bin_data)
+    ok = (upright["ok"] and hierarchy["ok"] and deformation["ok"]
+          and arm_pose["ok"] and skinning["ok"])
     return {"path": glb_path, "ok": ok, "upright": upright,
-            "hierarchy": hierarchy, "deformation": deformation, "arm_pose": arm_pose}
+            "hierarchy": hierarchy, "deformation": deformation,
+            "arm_pose": arm_pose, "skinning": skinning}
 
 
 def main():
@@ -303,7 +436,7 @@ def main():
     else:
         status = "PASS" if report["ok"] else "FAIL"
         print(f"[{status}] {args.glb}")
-        for section in ("upright", "hierarchy", "deformation", "arm_pose"):
+        for section in ("upright", "hierarchy", "deformation", "arm_pose", "skinning"):
             r = report[section]
             print(f"  {section}: {'ok' if r['ok'] else 'FAIL'}")
             for issue in r.get("issues", []):
