@@ -386,6 +386,60 @@ def _cut_fused_bridges(gltf, bin_data, prim, doms):
     return cut
 
 
+def _quadruped_faces_backward(all_pos):
+    """4족 메시가 −Z를 향하는지(머리가 min_z 쪽인지) 감지한다.
+
+    복원 메시의 진행 방향은 보장되지 않는다 — 개가 −Z를 향하면 머리/꼬리가
+    뒤바뀐 채 리깅되고 SMPL 보행 리타게팅(+Z 전진)이 뒤로 걷게 되는데,
+    스켈레톤이 좌우 대칭이라 검증 게이트로는 잡히지 않는다.
+
+    판별은 척추선(0.55h, _quadruped_joint_layout의 spine_y와 동일) 위
+    버텍스 질량 비교다: 머리는 척추 위로 솟은 부피가 크고(두개골·목)
+    꼬리는 가늘어서, 전방 1/3과 후방 1/3에서 y > min_y + 0.55h 버텍스
+    수를 세면 머리 쪽이 항상 많다. 후방이 더 많으면 −Z 방향으로 판정한다.
+    """
+    ys = [p[1] for p in all_pos]; zs = [p[2] for p in all_pos]
+    min_y = min(ys)
+    h = (max(ys) - min_y) or 1.0
+    min_z, max_z = min(zs), max(zs)
+    zc = (min_z + max_z) / 2
+    length = (max_z - min_z) or 1.0
+    y_high = min_y + 0.55 * h
+    front = sum(1 for p in all_pos if p[2] > zc + 0.15 * length and p[1] > y_high)
+    rear = sum(1 for p in all_pos if p[2] < zc - 0.15 * length and p[1] > y_high)
+    return rear > front
+
+
+def _flip_mesh_yaw180(gltf, bin_data):
+    """메시를 Y축 기준 180° 회전한다 (x, z 부호 반전, in-place).
+
+    POSITION과 NORMAL 어커서를 모두 재기록하고 min/max를 갱신한다.
+    yaw 180°는 winding order를 보존하므로 인덱스는 손대지 않는다.
+    """
+    seen = set()
+    for mesh in gltf.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            attrs = prim.get("attributes", {})
+            for name in ("POSITION", "NORMAL"):
+                aid = attrs.get(name)
+                if aid is None or aid in seen:
+                    continue
+                seen.add(aid)
+                acc = gltf["accessors"][aid]
+                view = gltf["bufferViews"][acc["bufferView"]]
+                stride = view.get("byteStride", 12)
+                base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+                for i in range(acc["count"]):
+                    off = base + i * stride
+                    x, y, z = struct.unpack_from("<fff", bin_data, off)
+                    struct.pack_into("<fff", bin_data, off, -x, y, -z)
+                # x/z 반전은 min/max를 서로 맞바꾼다 (y는 그대로).
+                if "min" in acc and "max" in acc:
+                    mn, mx = acc["min"], acc["max"]
+                    acc["min"] = [-mx[0], mn[1], -mx[2]]
+                    acc["max"] = [-mn[0], mx[1], -mn[2]]
+
+
 def _quadruped_joint_layout(all_pos):
     """4족 메시에서 수평 척추 + 다리 4체인 + 머리/꼬리 스켈레톤 배치를 실측한다.
 
@@ -512,6 +566,11 @@ def auto_rig(glb_path, output_path):
     s = _normalize_character_scale(gltf, bin_data, body_type)
     if s != 1.0:
         all_pos = [(p[0] * s, p[1] * s, p[2] * s) for p in all_pos]
+    # 4족이 −Z를 향하면 관절 배치 전에 메시를 +Z 방향으로 돌려 세운다 —
+    # 안 그러면 머리/꼬리가 뒤바뀐 리깅이 되고 보행 모션이 뒤로 걷는다.
+    if body_type == "quadruped" and _quadruped_faces_backward(all_pos):
+        _flip_mesh_yaw180(gltf, bin_data)
+        all_pos = [(-p[0], p[1], -p[2]) for p in all_pos]
 
     xs = [p[0] for p in all_pos]; ys = [p[1] for p in all_pos]
     min_x, max_x = min(xs), max(xs)

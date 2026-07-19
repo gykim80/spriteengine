@@ -478,9 +478,11 @@ class ScaleNormalizeTest(unittest.TestCase):
                                worker.STANDARD_CHARACTER_HEIGHT * 0.52, places=3)
 
 
-def make_quadruped_glb(path, scale=1.0):
+def make_quadruped_glb(path, scale=1.0, reverse=False):
     """개 형태의 4족 GLB — 수평 몸통(Z 장축) + 다리 4기둥 + 머리/꼬리.
 
+    reverse=True면 Y축 180° 회전(x,z 부호 반전) — 머리가 −Z를 향하는
+    역방향 복원 메시를 흉내 낸다.
     반환: (positions, part_of) — part_of[i]는 버텍스 i의 부위 라벨.
     """
     pts = []
@@ -488,7 +490,10 @@ def make_quadruped_glb(path, scale=1.0):
 
     def add(part, p):
         part_of.append(part)
-        pts.append((p[0] * scale, p[1] * scale, p[2] * scale))
+        x, y, z = p[0] * scale, p[1] * scale, p[2] * scale
+        if reverse:
+            x, z = -x, -z
+        pts.append((x, y, z))
 
     for z in (-0.40, -0.20, 0.0, 0.20, 0.40):          # 몸통 (등 y0.62 / 배 y0.38)
         for sx in (-1, 1):
@@ -616,6 +621,29 @@ class QuadrupedRigTest(unittest.TestCase):
             if side and part.startswith("leg_"):
                 self.assertTrue(dom.startswith("Left" if side == "L" else "Right"),
                                 f"{part} vertex {i} crossed sides to {dom}")
+
+    def test_backward_facing_dog_flipped(self):
+        """−Z를 향해 복원된 개는 리깅 전에 자동으로 180° 플립되어야 한다 —
+        안 그러면 머리/꼬리가 뒤바뀐 리깅이 되고 보행 모션이 뒤로 걷는데,
+        스켈레톤이 좌우 대칭이라 검증 게이트로는 잡히지 않는다."""
+        rev = os.path.join(self.tmp.name, "reversed.glb")
+        rev_out = os.path.join(self.tmp.name, "reversed-rigged.glb")
+        pts, part_of = make_quadruped_glb(rev, reverse=True)
+        # 방향 감지기: 역방향 개만 backward, 정방향 개는 forward
+        self.assertTrue(worker._quadruped_faces_backward(pts))
+        self.assertFalse(worker._quadruped_faces_backward(self.pts))
+        self.assertEqual(worker.auto_rig(rev, rev_out), "quadruped")
+        gltf, bin_data = worker._read_glb(rev_out)
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        pos = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+        head_z = [pos[i][2] for i, p in enumerate(part_of) if p == "head"]
+        tail_z = [pos[i][2] for i, p in enumerate(part_of) if p == "tail"]
+        self.assertGreater(min(head_z), 0.0)  # 플립 후 머리 지오메트리는 +Z(전방)
+        self.assertLess(max(tail_z), 0.0)     # 꼬리는 −Z(후방)
+        node_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
+        world = worker._rig_rest_world(gltf, node_by_name)
+        self.assertGreater(world["Head"][2], world["Chest"][2])  # 머리 조인트도 전방
+        self.assertLess(world["Hips"][2], world["Chest"][2])
 
     def test_length_scale_normalization(self):
         """4족은 키(Y)가 아니라 체장(Z) 기준으로 정규화 — 0.88m 개가 휴머노이드
