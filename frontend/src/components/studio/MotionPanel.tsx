@@ -163,7 +163,7 @@ export default function MotionPanel({modelUrl, usingFallback, jobName, jobId, on
             </div>
             <button className="director-export" onClick={generateAIMotion} disabled={!prompt.trim() || generating}
               title="HY-Motion-1.0(RunPod GPU)으로 자연어에서 실제 모션을 생성해 리깅된 모델에 베이킹합니다">
-              <Sparkles />{generating ? 'AI 모션 생성 중…' : 'AI 모션 생성 (HY-Motion)'}
+              <Sparkles />{generating ? '모션 생성 중…' : '모션 생성'}
             </button>
             {motion && (
               <>
