@@ -478,12 +478,13 @@ class ScaleNormalizeTest(unittest.TestCase):
                                worker.STANDARD_CHARACTER_HEIGHT * 0.52, places=3)
 
 
-def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False):
+def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False, tail=True):
     """개 형태의 4족 GLB — 수평 몸통(Z 장축) + 다리 4기둥 + 머리/꼬리.
 
     reverse=True면 Y축 180° 회전(x,z 부호 반전) — 머리가 −Z를 향하는
     역방향 복원 메시를 흉내 낸다. sideways=True면 추가로 yaw 90° 회전해
-    체장이 X축을 따르는 측방향 복원 메시를 흉내 낸다.
+    체장이 X축을 따르는 측방향 복원 메시를 흉내 낸다. tail=False면 꼬리가
+    복원에서 뭉개져 사라진 메시를 흉내 낸다.
     반환: (positions, part_of) — part_of[i]는 버텍스 i의 부위 라벨.
     """
     pts = []
@@ -506,9 +507,10 @@ def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False):
         for sx in (-1, 1):
             for y in (0.55, 0.85):
                 add("head", (0.10 * sx, y, z))
-    for z in (-0.70, -0.58, -0.45):                    # 꼬리 (후방)
-        for sx in (-1, 1):
-            add("tail", (0.03 * sx, 0.62, z))
+    if tail:
+        for z in (-0.70, -0.58, -0.45):                # 꼬리 (후방)
+            for sx in (-1, 1):
+                add("tail", (0.03 * sx, 0.62, z))
     for part, zc in (("front", 0.30), ("rear", -0.30)):  # 다리 4기둥
         for sx in (-1, 1):
             side = "L" if sx > 0 else "R"
@@ -696,6 +698,17 @@ class QuadrupedRigTest(unittest.TestCase):
               for f in range(acc["count"])]
         self.assertGreater(max(qy) - min(qy), 0.05,
                            "tail must actually sway, not stay rigid")
+
+    def test_tailless_dog_rigs_and_animates(self):
+        """복원에서 꼬리가 뭉개져 사라진 개도 4족 리깅과 모션 베이킹이
+        성립해야 한다 — Tail 조인트 유무와 무관하게 크래시 없이 동작."""
+        src = os.path.join(self.tmp.name, "tailless.glb")
+        rigged = os.path.join(self.tmp.name, "tailless-rigged.glb")
+        animated = os.path.join(self.tmp.name, "tailless-animated.glb")
+        make_quadruped_glb(src, tail=False)
+        self.assertEqual(worker.auto_rig(src, rigged), "quadruped")
+        self.assertEqual(
+            worker.bake_animation(rigged, make_motion(frames=10), animated), 1)
 
     def test_length_scale_normalization(self):
         """4족은 키(Y)가 아니라 체장(Z) 기준으로 정규화 — 0.88m 개가 휴머노이드
