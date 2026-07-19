@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -260,15 +261,29 @@ func TestRunPodGenerateMotionBatchesOver20(t *testing.T) {
 		if len(req.Input.Prompts) > 20 {
 			t.Errorf("batch exceeds handler limit: %d prompts", len(req.Input.Prompts))
 		}
-		batchSizes = append(batchSizes, len(req.Input.Prompts))
-		frame := make([][]float64, len(joints))
-		for i := range frame {
-			frame[i] = []float64{0, 0, 0, 1}
+		// 워커의 렌더링 정상성 게이트(deformation 검사)는 항등/중복 클립을
+		// 실패시키므로, 클립마다 상이한 소각도 L_Shoulder 회전을 넣어 최소한의
+		// 유효 모션을 만든다 (배칭 검증이라는 테스트 의도는 그대로).
+		// base는 전역 클립 인덱스 기반이어야 배치 간(clip01 vs clip16) 중복이 없다.
+		offset := 0
+		for _, s := range batchSizes {
+			offset += s
 		}
-		quats := [][][]float64{frame, frame, frame}
+		batchSizes = append(batchSizes, len(req.Input.Prompts))
 		trans := [][]float64{{0, 0.9, 0}, {0, 0.95, 0}, {0, 0.9, 0}}
 		motions := make([]map[string]any, 0, len(req.Input.Prompts))
-		for _, p := range req.Input.Prompts {
+		for pi, p := range req.Input.Prompts {
+			base := 0.05 + 0.01*float64(offset+pi)
+			quats := make([][][]float64, 3)
+			for f := 0; f < 3; f++ {
+				frame := make([][]float64, len(joints))
+				for j := range frame {
+					frame[j] = []float64{0, 0, 0, 1}
+				}
+				half := base * float64(f) / 2
+				frame[16] = []float64{math.Sin(half), 0, 0, math.Cos(half)} // L_Shoulder
+				quats[f] = frame
+			}
 			motions = append(motions, map[string]any{
 				"id": p.ID, "text": p.Text, "fps": 30,
 				"joints": joints, "quats": quats, "trans": trans,

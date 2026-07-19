@@ -642,7 +642,9 @@ func (a *App) bakeMotionGLB(jobID, workspace, riggedGLB string) (Artifact, error
 			baked = &Artifact{Stage: "motion", Kind: ev.Kind, Path: ev.Path, Metrics: ev.Metrics}
 		}
 	}
-	if err := cmd.Wait(); err != nil {
+	// 워커는 실패 사유를 stdout error 이벤트로 보낸 뒤 exit 1 한다 —
+	// exit code보다 그 메시지(예: 렌더링 정상성 게이트 사유)를 우선한다.
+	if err := cmd.Wait(); err != nil && workerErr == nil {
 		return Artifact{}, fmt.Errorf("motion bake worker failed: %v %s", err, stderr.String())
 	}
 	if workerErr != nil {

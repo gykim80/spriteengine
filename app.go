@@ -23,7 +23,7 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-//go:embed workers/*.py
+//go:embed workers/*.py tools/matrix/validate_character.py
 var workerFiles embed.FS
 
 type App struct {
@@ -228,13 +228,19 @@ func (a *App) importPath(path string) (Job, error) {
 }
 
 func (a *App) workerPath() (string, error) {
-	files := []string{"baseline_worker.py", "procedural_character.py"}
+	// validate_character.py(렌더링 정상성 게이트)도 함께 추출해야 임베드
+	// 실행 환경에서 워커가 rig/motion 결과를 실측 검증할 수 있다.
+	files := map[string]string{
+		"workers/baseline_worker.py":         "baseline_worker.py",
+		"workers/procedural_character.py":    "procedural_character.py",
+		"tools/matrix/validate_character.py": "validate_character.py",
+	}
 	dir := filepath.Join(a.rootPath(), "runtime")
 	if e := os.MkdirAll(dir, 0755); e != nil {
 		return "", e
 	}
-	for _, name := range files {
-		data, e := workerFiles.ReadFile("workers/" + name)
+	for src, name := range files {
+		data, e := workerFiles.ReadFile(src)
 		if e != nil {
 			return "", e
 		}
@@ -367,6 +373,13 @@ func (a *App) RunNextStage(id string) (Job, error) {
 	}
 	e = cmd.Wait()
 	if e != nil {
+		// 워커는 실패 사유를 stdout의 error 이벤트로 보낸 뒤 exit 1 한다 —
+		// exit code보다 그 메시지(예: 렌더링 정상성 게이트 사유)를 로그에 남긴다.
+		for _, ev := range events {
+			if ev.Type == "error" && ev.Message != "" {
+				return a.failStage(idx, stageIndex, errors.New(ev.Message))
+			}
+		}
 		return a.failStage(idx, stageIndex, fmt.Errorf("worker failed: %v %s", e, stderr.String()))
 	}
 	a.mu.Lock()

@@ -33,12 +33,15 @@ import struct
 import sys
 
 # baseline_worker.py는 모듈 최상단에서 stdin 루프를 돈다 — 빈 stdin으로
-# 바꿔치기한 뒤 임포트해 GLB 헬퍼 함수만 재사용한다.
+# 바꿔치기한 뒤 임포트해 GLB 헬퍼 함수만 재사용한다. repo 체크아웃에서는
+# ../../workers/에, 앱 임베드 추출(runtime/) 환경에서는 형제 경로에 있다.
+_here = os.path.dirname(os.path.abspath(__file__))
+_worker_path = next(p for p in (os.path.join(_here, "..", "..", "workers", "baseline_worker.py"),
+                                os.path.join(_here, "baseline_worker.py"))
+                    if os.path.exists(p))
 _stdin_backup = sys.stdin
 sys.stdin = io.StringIO("")
-_spec = importlib.util.spec_from_file_location(
-    "baseline_worker",
-    os.path.join(os.path.dirname(__file__), "..", "..", "workers", "baseline_worker.py"))
+_spec = importlib.util.spec_from_file_location("baseline_worker", _worker_path)
 worker = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(worker)
 sys.stdin = _stdin_backup

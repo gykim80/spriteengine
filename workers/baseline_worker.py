@@ -765,11 +765,14 @@ def render_check(path):
     직립/관절계층/클립변형/팔자세/스키닝을 실측해 "누워서 리깅됨",
     "팔이 위로 꺾임" 같은 버그가 앱 파이프라인을 통과하지 못하게 막는다.
     검증기 파일이 없는 배포 환경(예: RunPod 컨테이너)에서는 None을 반환해
-    게이트를 건너뛴다.
+    게이트를 건너뛴다. 앱은 임베드된 검증기를 워커와 같은 runtime 디렉토리에
+    추출하므로 형제 경로를 먼저, repo 체크아웃 경로를 다음으로 찾는다.
     """
-    vpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "..", "tools", "matrix", "validate_character.py")
-    if not os.path.exists(vpath):
+    here = os.path.dirname(os.path.abspath(__file__))
+    vpath = next((p for p in (os.path.join(here, "validate_character.py"),
+                              os.path.join(here, "..", "tools", "matrix", "validate_character.py"))
+                  if os.path.exists(p)), None)
+    if vpath is None:
         return None
     spec = importlib.util.spec_from_file_location("validate_character", vpath)
     mod = importlib.util.module_from_spec(spec)

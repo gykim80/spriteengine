@@ -31,18 +31,21 @@ for x,y,z in pos:
  j=0 if y<.5 else 1 if y<1.35 else 2;joints.append((j,0,0,0));weights.append((1.,0.,0.,0.))
 pa=pack(pos,'f',5126,'VEC3',len(pos),[-.42,0,-.2],[.42,1.75,.2],34962);na=pack(norm,'f',5126,'VEC3',len(pos),target=34962);ja=pack(joints,'H',5123,'VEC4',len(pos),target=34962);wa=pack(weights,'f',5126,'VEC4',len(pos),target=34962);ia=pack(faces,'H',5123,'SCALAR',len(faces),[0],[11],34963)
 # skeleton hips->spine->chest->head, arms and legs
+# 다리는 Hips의 자식이어야 hip 이동/회전이 전파된다 (단일 루트 = Hips).
+# RightForeArm(14)은 좌우 대칭을 위해 존재해야 하며, 기존 인덱스 보존을 위해 끝에 둔다.
 nodes=[
- {'name':'Character','children':[1,8,11],'mesh':0,'skin':0},
- {'name':'Hips','translation':[0,.65,0],'children':[2]},
+ {'name':'Character','children':[1],'mesh':0,'skin':0},
+ {'name':'Hips','translation':[0,.65,0],'children':[2,8,11]},
  {'name':'Spine','translation':[0,.45,0],'children':[3]},
  {'name':'Chest','translation':[0,.45,0],'children':[4,5,6]},
  {'name':'Head','translation':[0,.5,0]},
- {'name':'LeftArm','translation':[-.35,.25,0],'children':[7]}, {'name':'RightArm','translation':[.35,.25,0]}, {'name':'LeftForeArm','translation':[-.45,0,0]},
- {'name':'LeftUpLeg','translation':[-.2,.65,0],'children':[9]}, {'name':'LeftLeg','translation':[0,-.65,0],'children':[10]}, {'name':'LeftFoot','translation':[0,-.55,.12]},
- {'name':'RightUpLeg','translation':[.2,.65,0],'children':[12]}, {'name':'RightLeg','translation':[0,-.65,0],'children':[13]}, {'name':'RightFoot','translation':[0,-.55,.12]}]
+ {'name':'LeftArm','translation':[-.35,.25,0],'children':[7]}, {'name':'RightArm','translation':[.35,.25,0],'children':[14]}, {'name':'LeftForeArm','translation':[-.45,0,0]},
+ {'name':'LeftUpLeg','translation':[-.2,0,0],'children':[9]}, {'name':'LeftLeg','translation':[0,-.65,0],'children':[10]}, {'name':'LeftFoot','translation':[0,-.55,.12]},
+ {'name':'RightUpLeg','translation':[.2,0,0],'children':[12]}, {'name':'RightLeg','translation':[0,-.65,0],'children':[13]}, {'name':'RightFoot','translation':[0,-.55,.12]},
+ {'name':'RightForeArm','translation':[.45,0,0]}]
 # inverse binds simplified identity; structurally valid and renderer recomputes world transforms
 mats=[]
-for _ in range(13):mats.append((1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1))
+for _ in range(14):mats.append((1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1))
 iba=pack(mats,'f',5126,'MAT4',len(mats))
 times=[(0.,),(.5,),(1.,)];ta=pack(times,'f',5126,'SCALAR',3,[0],[1])
 def quat_x(a):return (math.sin(a/2),0,0,math.cos(a/2))
@@ -54,8 +57,8 @@ def clip(name,amount):
   sam.append({'input':ta,'output':oa,'interpolation':'LINEAR'});chs.append({'sampler':len(sam)-1,'target':{'node':node,'path':'rotation'}})
  return {'name':name,'samplers':sam,'channels':chs}
 anims=[clip('Idle',.035),clip('Walk',.55),clip('Run',.9)]
-doc={'asset':{'version':'2.0','generator':'SpriteEngine procedural worker'},'scene':0,'scenes':[{'nodes':[0]}],'nodes':nodes,'meshes':[{'name':'CharacterMesh','primitives':[{'attributes':{'POSITION':pa,'NORMAL':na,'JOINTS_0':ja,'WEIGHTS_0':wa},'indices':ia,'material':0}]}],'materials':[{'name':'StudioMaterial','pbrMetallicRoughness':{'baseColorFactor':[.22,.46,.68,1],'metallicFactor':0,'roughnessFactor':.72}}],'skins':[{'name':'HumanoidRig','inverseBindMatrices':iba,'joints':list(range(1,14)),'skeleton':1}],'animations':anims,'buffers':[{'byteLength':len(buf)}],'bufferViews':views,'accessors':access}
+doc={'asset':{'version':'2.0','generator':'SpriteEngine procedural worker'},'scene':0,'scenes':[{'nodes':[0]}],'nodes':nodes,'meshes':[{'name':'CharacterMesh','primitives':[{'attributes':{'POSITION':pa,'NORMAL':na,'JOINTS_0':ja,'WEIGHTS_0':wa},'indices':ia,'material':0}]}],'materials':[{'name':'StudioMaterial','pbrMetallicRoughness':{'baseColorFactor':[.22,.46,.68,1],'metallicFactor':0,'roughnessFactor':.72}}],'skins':[{'name':'HumanoidRig','inverseBindMatrices':iba,'joints':list(range(1,15)),'skeleton':1}],'animations':anims,'buffers':[{'byteLength':len(buf)}],'bufferViews':views,'accessors':access}
 js=json.dumps(doc,separators=(',',':')).encode();js+=b' '*((4-len(js)%4)%4);align();binb=bytes(buf);binb+=b'\0'*((4-len(binb)%4)%4)
 glb=struct.pack('<4sII',b'glTF',2,12+8+len(js)+8+len(binb))+struct.pack('<I4s',len(js),b'JSON')+js+struct.pack('<I4s',len(binb),b'BIN\0')+binb
 open(out,'wb').write(glb)
-print(json.dumps({'path':out,'bytes':len(glb),'triangles':len(faces)//3,'bones':13,'clips':['Idle','Walk','Run']}))
+print(json.dumps({'path':out,'bytes':len(glb),'triangles':len(faces)//3,'bones':14,'clips':['Idle','Walk','Run']}))
