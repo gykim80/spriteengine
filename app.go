@@ -136,33 +136,41 @@ func (a *App) load() {
 		a.save()
 	}
 }
-func (a *App) save() {
-	_ = os.MkdirAll(filepath.Dir(a.dataPath()), 0755)
-	// 외부 도구(tools/matrix/run_character.py 등)가 앱 실행 중 jobs.json에
-	// 직접 등록한 job은 메모리에 없다 — 메모리 목록으로 통째로 덮어쓰면
-	// 유실되므로, 디스크에만 있는 항목을 병합한 뒤 저장한다.
-	// 이번 세션에서 명시적으로 삭제한 job은 부활시키지 않는다.
-	if b, err := os.ReadFile(a.dataPath()); err == nil {
-		var disk []Job
-		if json.Unmarshal(b, &disk) == nil {
-			known := make(map[string]bool, len(a.jobs))
-			for _, j := range a.jobs {
-				known[j.ID] = true
-			}
-			merged := false
-			for _, j := range disk {
-				if j.ID != "" && !known[j.ID] && !a.deleted[j.ID] {
-					a.jobs = append(a.jobs, j)
-					merged = true
-				}
-			}
-			if merged {
-				// UI는 최신 job이 위에 오길 기대한다 — ID 접두사가
-				// "20060102-150405" 타임스탬프라 문자열 내림차순 = 최신순.
-				sort.SliceStable(a.jobs, func(x, y int) bool { return a.jobs[x].ID > a.jobs[y].ID })
-			}
+// mergeDiskJobsLocked는 외부 도구(tools/matrix/run_character.py 등)가 앱
+// 실행 중 jobs.json에 직접 등록해 메모리에는 없는 job을 목록에 병합한다.
+// 이번 세션에서 명시적으로 삭제한 job은 부활시키지 않는다.
+// a.mu를 잡은 상태에서 호출해야 한다.
+func (a *App) mergeDiskJobsLocked() {
+	b, err := os.ReadFile(a.dataPath())
+	if err != nil {
+		return
+	}
+	var disk []Job
+	if json.Unmarshal(b, &disk) != nil {
+		return
+	}
+	known := make(map[string]bool, len(a.jobs))
+	for _, j := range a.jobs {
+		known[j.ID] = true
+	}
+	merged := false
+	for _, j := range disk {
+		if j.ID != "" && !known[j.ID] && !a.deleted[j.ID] {
+			a.jobs = append(a.jobs, j)
+			merged = true
 		}
 	}
+	if merged {
+		// UI는 최신 job이 위에 오길 기대한다 — ID 접두사가
+		// "20060102-150405" 타임스탬프라 문자열 내림차순 = 최신순.
+		sort.SliceStable(a.jobs, func(x, y int) bool { return a.jobs[x].ID > a.jobs[y].ID })
+	}
+}
+
+func (a *App) save() {
+	_ = os.MkdirAll(filepath.Dir(a.dataPath()), 0755)
+	// 메모리 목록으로 통째로 덮어쓰면 외부 등록 job이 유실되므로 병합 후 저장.
+	a.mergeDiskJobsLocked()
 	b, _ := json.MarshalIndent(a.jobs, "", "  ")
 	_ = os.WriteFile(a.dataPath(), b, 0644)
 }
@@ -192,6 +200,9 @@ func (a *App) CreateJob(name string) (Job, error) {
 func (a *App) ListJobs() []Job {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// 목록 조회 시에도 병합 — 외부 등록 프로젝트가 앱 재시작 없이
+	// 목록 새로고침만으로 나타난다.
+	a.mergeDiskJobsLocked()
 	out := make([]Job, len(a.jobs))
 	copy(out, a.jobs)
 	return out

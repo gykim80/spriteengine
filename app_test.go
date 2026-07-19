@@ -142,6 +142,34 @@ func TestSaveMergesExternallyRegisteredJobs(t *testing.T) {
 	}
 }
 
+// TestListJobsPicksUpExternallyRegisteredJobs: 외부 도구가 등록한 job이
+// 앱 재시작 없이 ListJobs(프로젝트 목록 새로고침)만으로 나타나야 한다.
+func TestListJobsPicksUpExternallyRegisteredJobs(t *testing.T) {
+	isolateConfig(t)
+	a := NewApp()
+	if _, err := a.CreateJob("in-app"); err != nil {
+		t.Fatal(err)
+	}
+	var disk []Job
+	b, err := os.ReadFile(a.dataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &disk); err != nil {
+		t.Fatal(err)
+	}
+	external := Job{ID: "20990101-000000-000002", Name: "external-live", Status: "done", Stages: pipeline()}
+	disk = append([]Job{external}, disk...)
+	b, _ = json.MarshalIndent(disk, "", "  ")
+	if err := os.WriteFile(a.dataPath(), b, 0644); err != nil {
+		t.Fatal(err)
+	}
+	jobs := a.ListJobs()
+	if len(jobs) != 2 || jobs[0].ID != external.ID {
+		t.Fatalf("external job not visible via ListJobs: %#v", jobs)
+	}
+}
+
 func TestReadArtifactRejectsUnregisteredPath(t *testing.T) {
 	a := NewApp()
 	if _, err := a.ReadArtifact(filepath.Join(t.TempDir(), "unknown.glb")); err == nil {
