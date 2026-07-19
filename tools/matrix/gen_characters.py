@@ -76,11 +76,31 @@ TEMPLATE = ("Full body 3D game character concept art of {desc}. Single character
             "Stylized PBR game-asset look, clean plain light gray studio background, "
             "soft even lighting, no shadows on background, no text, no watermark.")
 
+# 세트 q: 4족(quadruped) 리깅 경로 검증용 (--set q 또는 CHARACTER_SET=q).
+# 측면 실루엣이 4족 복원에 가장 유리하며, 복원 결과가 X축 체장으로 나와도
+# auto-rig의 측방향 정렬(yaw 90°)·머리 방향 감지(180°) 경로가 정규화한다.
+CHARACTERS_QUADRUPED = {
+    "dog":   "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
+    "horse": "a sturdy brown horse with a dark mane and tail",
+    "cat":   "a gray tabby cat with a long straight tail",
+}
+
+# A-pose/팔 문구는 휴머노이드 전용이라 4족은 별도 템플릿을 쓴다.
+QUADRUPED_TEMPLATE = ("Full body 3D game animal concept art of {desc}. Single animal, "
+                      "standing naturally on all four legs, seen directly from the side "
+                      "with the head to the right, all four legs and the tail clearly "
+                      "visible, whole body in frame. Stylized PBR game-asset look, "
+                      "clean plain light gray studio background, soft even lighting, "
+                      "no shadows on background, no text, no watermark.")
+
 
 def generate(name, desc):
+    tpl = QUADRUPED_TEMPLATE if name in CHARACTERS_QUADRUPED else TEMPLATE
+    # 4족 측면 실루엣은 가로가 길어 가로형 캔버스가 잘림 없이 담긴다.
+    size = "1536x1024" if name in CHARACTERS_QUADRUPED else "1024x1536"
     body = json.dumps({
-        "model": "gpt-image-2", "prompt": TEMPLATE.format(desc=desc),
-        "size": "1024x1536", "quality": "medium", "n": 1,
+        "model": "gpt-image-2", "prompt": tpl.format(desc=desc),
+        "size": size, "quality": "medium", "n": 1,
     }).encode()
     req = urllib.request.Request(
         "https://api.openai.com/v1/images/generations", data=body, method="POST",
@@ -95,10 +115,10 @@ def generate(name, desc):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--set", choices=["1", "2"], default=os.environ.get("CHARACTER_SET", "1"))
+    ap.add_argument("--set", choices=["1", "2", "q"], default=os.environ.get("CHARACTER_SET", "1"))
     ap.add_argument("--only", help="쉼표로 구분한 캐릭터 이름만 생성 (예: samurai,boxer)")
     args = ap.parse_args()
-    pool = CHARACTERS if args.set == "1" else CHARACTERS_SET2
+    pool = {"1": CHARACTERS, "2": CHARACTERS_SET2, "q": CHARACTERS_QUADRUPED}[args.set]
     if args.only:
         wanted = [n.strip() for n in args.only.split(",") if n.strip()]
         pool = {n: pool[n] for n in wanted if n in pool}
