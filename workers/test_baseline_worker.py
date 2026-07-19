@@ -478,11 +478,12 @@ class ScaleNormalizeTest(unittest.TestCase):
                                worker.STANDARD_CHARACTER_HEIGHT * 0.52, places=3)
 
 
-def make_quadruped_glb(path, scale=1.0, reverse=False):
+def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False):
     """개 형태의 4족 GLB — 수평 몸통(Z 장축) + 다리 4기둥 + 머리/꼬리.
 
     reverse=True면 Y축 180° 회전(x,z 부호 반전) — 머리가 −Z를 향하는
-    역방향 복원 메시를 흉내 낸다.
+    역방향 복원 메시를 흉내 낸다. sideways=True면 추가로 yaw 90° 회전해
+    체장이 X축을 따르는 측방향 복원 메시를 흉내 낸다.
     반환: (positions, part_of) — part_of[i]는 버텍스 i의 부위 라벨.
     """
     pts = []
@@ -493,6 +494,8 @@ def make_quadruped_glb(path, scale=1.0, reverse=False):
         x, y, z = p[0] * scale, p[1] * scale, p[2] * scale
         if reverse:
             x, z = -x, -z
+        if sideways:
+            x, z = z, -x  # yaw +90°: 머리(+Z)가 +X를 향한다
         pts.append((x, y, z))
 
     for z in (-0.40, -0.20, 0.0, 0.20, 0.40):          # 몸통 (등 y0.62 / 배 y0.38)
@@ -644,6 +647,35 @@ class QuadrupedRigTest(unittest.TestCase):
         world = worker._rig_rest_world(gltf, node_by_name)
         self.assertGreater(world["Head"][2], world["Chest"][2])  # 머리 조인트도 전방
         self.assertLess(world["Hips"][2], world["Chest"][2])
+
+    def test_sideways_dog_realigned(self):
+        """체장이 X축으로 복원된 개는 yaw 90° 정렬 후 리깅되어야 한다 —
+        정렬 없이는 분류기가 Z 체장만 보므로 휴머노이드로 오분류되어
+        upright 게이트에서 작업 전체가 실패한다. reverse 조합은 정렬 후
+        역방향 감지·플립까지 연쇄 동작하는지 검증한다."""
+        for rev in (False, True):
+            with self.subTest(reverse=rev):
+                src = os.path.join(self.tmp.name, f"side-{rev}.glb")
+                out = os.path.join(self.tmp.name, f"side-{rev}-rigged.glb")
+                _, part_of = make_quadruped_glb(src, sideways=True, reverse=rev)
+                self.assertEqual(worker.auto_rig(src, out), "quadruped")
+                gltf, bin_data = worker._read_glb(out)
+                attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+                pos = worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")
+                xs = [p[0] for p in pos]; zs = [p[2] for p in pos]
+                self.assertGreater(max(zs) - min(zs), max(xs) - min(xs),
+                                   "body length must be realigned to Z")
+                head_z = [pos[i][2] for i, p in enumerate(part_of) if p == "head"]
+                self.assertGreater(min(head_z), 0.0)  # 머리는 최종적으로 +Z(전방)
+
+    def test_sideways_lying_humanoid_not_rotated(self):
+        """X축으로 길게 누운 휴머노이드는 yaw 정렬 후보에서 배 밑 갭 확인에
+        걸려 회전 없이 humanoid로 남아야 한다 — 그래야 기존 upright 게이트가
+        누움을 잡는다."""
+        lying_x = [(round(0.1 * i - 0.9, 2), y, x)
+                   for i in range(19) for x in (-0.3, 0.3) for y in (0.0, 0.3)]
+        rotated = [(-p[2], p[1], p[0]) for p in lying_x]
+        self.assertEqual(worker._classify_body_type(rotated), "humanoid")
 
     def test_length_scale_normalization(self):
         """4족은 키(Y)가 아니라 체장(Z) 기준으로 정규화 — 0.88m 개가 휴머노이드

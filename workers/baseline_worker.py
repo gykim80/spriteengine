@@ -410,11 +410,11 @@ def _quadruped_faces_backward(all_pos):
     return rear > front
 
 
-def _flip_mesh_yaw180(gltf, bin_data):
-    """메시를 Y축 기준 180° 회전한다 (x, z 부호 반전, in-place).
+def _rewrite_mesh_vec3(gltf, bin_data, fn):
+    """모든 POSITION/NORMAL 버텍스를 fn(x,y,z)→(x',y',z')로 재기록한다 (in-place).
 
-    POSITION과 NORMAL 어커서를 모두 재기록하고 min/max를 갱신한다.
-    yaw 180°는 winding order를 보존하므로 인덱스는 손대지 않는다.
+    yaw 회전류(축 치환·부호 반전, det=+1) 전용 — winding order를 보존하므로
+    인덱스는 손대지 않고, min/max는 코너에 fn을 적용해 성분별로 재계산한다.
     """
     seen = set()
     for mesh in gltf.get("meshes", []):
@@ -431,13 +431,17 @@ def _flip_mesh_yaw180(gltf, bin_data):
                 base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
                 for i in range(acc["count"]):
                     off = base + i * stride
-                    x, y, z = struct.unpack_from("<fff", bin_data, off)
-                    struct.pack_into("<fff", bin_data, off, -x, y, -z)
-                # x/z 반전은 min/max를 서로 맞바꾼다 (y는 그대로).
+                    p = struct.unpack_from("<fff", bin_data, off)
+                    struct.pack_into("<fff", bin_data, off, *fn(*p))
                 if "min" in acc and "max" in acc:
-                    mn, mx = acc["min"], acc["max"]
-                    acc["min"] = [-mx[0], mn[1], -mx[2]]
-                    acc["max"] = [-mn[0], mx[1], -mn[2]]
+                    a, b = fn(*acc["min"]), fn(*acc["max"])
+                    acc["min"] = [min(a[k], b[k]) for k in range(3)]
+                    acc["max"] = [max(a[k], b[k]) for k in range(3)]
+
+
+def _flip_mesh_yaw180(gltf, bin_data):
+    """메시를 Y축 기준 180° 회전한다 (x, z 부호 반전, in-place)."""
+    _rewrite_mesh_vec3(gltf, bin_data, lambda x, y, z: (-x, y, -z))
 
 
 def _quadruped_joint_layout(all_pos):
@@ -560,6 +564,18 @@ def auto_rig(glb_path, output_path):
                 all_pos.extend(_read_vec3(gltf, bin_data, pid, "POSITION"))
     if not all_pos:
         return False
+    # 측방향 복원 4족(체장이 X축) 정렬: 코어 X가 최장이고 4족 비율을 넘으면
+    # yaw −90° 회전 후보를 만들어 보고, 배 밑 갭 확인까지 통과할 때만 버퍼를
+    # 실제로 회전한다 — T-pose 팔 벌린 휴머노이드는 확인 단계에서 걸러져
+    # 원본이 보존된다.
+    cx_ext = _core_extent([p[0] for p in all_pos])
+    cy_ext = _core_extent([p[1] for p in all_pos]) or 1e-9
+    cz_ext = _core_extent([p[2] for p in all_pos])
+    if cx_ext > cz_ext and cx_ext > QUADRUPED_LENGTH_RATIO * cy_ext:
+        rotated = [(-p[2], p[1], p[0]) for p in all_pos]  # yaw −90°: +X → +Z
+        if _classify_body_type(rotated) == "quadruped":
+            _rewrite_mesh_vec3(gltf, bin_data, lambda x, y, z: (-z, y, x))
+            all_pos = rotated
     body_type = _classify_body_type(all_pos)
     # 복원 스케일 이상치(표준 치수 대비 수배 차이)는 모션 루트 이동까지
     # 왜곡하므로, 관절 배치 전에 체형별 표준 치수로 정규화한다.
