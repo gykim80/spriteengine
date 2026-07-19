@@ -51,11 +51,23 @@ MOTIONS = [
 
 def rp(method, path, body=None, timeout=60):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(f"{BASE}/{EP}/{path}", data=data, method=method,
-                                 headers={"Authorization": "Bearer " + KEY,
-                                          "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read())
+    # GET(status 폴링)은 일시적 5xx/네트워크 오류를 재시도한다 — 단발 500이
+    # 파이프라인 전체를 죽이는 회귀 방지 (실측 2026-07-20: status 폴링 1회
+    # 500으로 gladiator 실행 중단). POST(run 제출)는 중복 제출로 GPU 작업이
+    # 고아로 남을 수 있어 재시도하지 않는다.
+    attempts = 4 if method == "GET" else 1
+    for attempt in range(attempts):
+        req = urllib.request.Request(f"{BASE}/{EP}/{path}", data=data, method=method,
+                                     headers={"Authorization": "Bearer " + KEY,
+                                              "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())
+        except Exception as exc:  # noqa: BLE001
+            if attempt + 1 >= attempts:
+                raise
+            print(f"[rp] transient error on {method} {path}: {exc} — retry {attempt + 1}", flush=True)
+            time.sleep(5 * (attempt + 1))
 
 
 def poll(job_ids, minutes=40):

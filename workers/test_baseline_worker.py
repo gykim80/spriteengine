@@ -1218,17 +1218,19 @@ class StripBasePlaneTest(unittest.TestCase):
     SLAB_VERTS = 21 * 21
 
     @staticmethod
-    def _make_glb(path, with_slab=True, rotation=None):
+    def _make_glb(path, with_slab=True, rotation=None, pillar_y0=0.06, pillar_dy=0.044):
         """좁은 수직 기둥(캐릭터) + 옵션 전폭 슬래브를 가진 indexed GLB.
 
         rotation을 주면 데이터를 Z-up으로 저장해 원시 Hunyuan 복원처럼
-        노드 회전(+90° X)으로 Y-up이 되는 경우를 재현한다."""
+        노드 회전(+90° X)으로 Y-up이 되는 경우를 재현한다.
+        기본 치수는 기둥 높이 1.76(슬래브 스팬 2.0 대비 구제 배율 ~1.13 —
+        허용 범위). pillar_dy를 줄이면 gladiator형 미니어처(기각 대상)가 된다."""
         world = []
         tris = []
-        # 기둥: x ∈ {-0.05,-0.02,0.02,0.05}, y = 0.02 + k·0.015 (0.02~0.62), z=0
+        # 기둥: x ∈ {-0.05,-0.02,0.02,0.05}, y = pillar_y0 + k·pillar_dy, z=0
         cols = (-0.05, -0.02, 0.02, 0.05)
         for k in range(41):
-            y = 0.02 + k * 0.015
+            y = pillar_y0 + k * pillar_dy
             for x in cols:
                 world.append((x, y, 0.0))
         for k in range(40):
@@ -1319,6 +1321,17 @@ class StripBasePlaneTest(unittest.TestCase):
         self._make_glb(glb, with_slab=False)
         before = open(glb, "rb").read()
         self.assertEqual(worker.strip_base_plane(glb, glb), 0)
+        self.assertEqual(open(glb, "rb").read(), before)
+
+    def test_rejects_miniature_rescue(self):
+        """슬래브 제거 후 캐릭터가 미니어처(구제 배율 초과)면 기각해야 한다
+        (실측 gladiator: 키 0.67 → x2.96 업스케일 시 버텍스 43%·텍셀 밀도
+        저하로 진흙 품질 — 구제 대신 이미지 재생성이 정답). 원본은 무변경."""
+        glb = os.path.join(self.tmp.name, "miniature.glb")
+        self._make_glb(glb, with_slab=True, pillar_y0=0.02, pillar_dy=0.015)  # 기둥 높이 0.6
+        before = open(glb, "rb").read()
+        with self.assertRaises(worker.BasePlaneRescueError):
+            worker.strip_base_plane(glb, glb)
         self.assertEqual(open(glb, "rb").read(), before)
 
 

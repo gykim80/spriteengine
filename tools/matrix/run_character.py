@@ -138,7 +138,13 @@ def _recon_candidates(name, pngs, out_dir, quadruped):
             cand.write_bytes(glb)
         # 바닥 판(base slab) 위에 서 있는 복원(실측: gladiator 3장, vampire-v1)은
         # 슬래브만 제거하면 정상 후보다 — 스코어링 전에 잘라낸다 (없으면 no-op).
-        stripped = validate_character.worker.strip_base_plane(str(cand), str(cand))
+        # 단, 제거 후 캐릭터가 미니어처(재정규화 배율 초과)면 저해상도 진흙
+        # 품질이므로 후보에서 제외한다 → 적응형 이미지 재생성으로 폴백.
+        try:
+            stripped = validate_character.worker.strip_base_plane(str(cand), str(cand))
+        except validate_character.worker.BasePlaneRescueError as exc:
+            print(f"[recon] {name}: image={png.stem} REJECTED — {exc}", flush=True)
+            continue
         if stripped:
             print(f"[recon] {name}: image={png.stem} stripped base plane ({stripped} verts)", flush=True)
         if quadruped:

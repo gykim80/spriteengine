@@ -39,7 +39,7 @@ def main():
         recon.write_bytes(recon_src.read_bytes())
     print(f"[seed] {name}: reconstruct {recon.stat().st_size} bytes", flush=True)
 
-    retopo_path, rig_path = rc.retopo_and_rig(name, recon)
+    retopo_path, rig_path, _body_type = rc.retopo_and_rig(name, recon)
     rc.generate_motion(name)
     motion_path, animations, model = rc.bake_and_validate(name, rig_path)
     exported = mp.run_worker("export", ws, motion_path)

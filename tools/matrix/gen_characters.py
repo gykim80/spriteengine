@@ -82,9 +82,14 @@ CHARACTERS = {
     "cyberpunk":  "a cyberpunk woman with neon blue jacket and glowing visor",
 }
 
+# 주의: 이미지에 받침대/바닥판이 있으면 Hunyuan3D가 슬래브째 복원해 정규화
+# 볼륨을 슬래브가 차지 → 캐릭터가 저해상도 미니어처로 축소된다 (실측
+# 2026-07-20: gladiator 3장 전부 슬래브 복원 → 진흙 품질). 명시적으로 금지한다.
 TEMPLATE = ("Full body 3D game character concept art of {desc}. Single character, "
             "standing straight in a relaxed A-pose with arms slightly away from the body, "
-            "facing the camera directly, feet visible, whole body in frame. "
+            "facing the camera directly, feet visible, whole body in frame, "
+            "standing directly on the plain background with no base, no pedestal, "
+            "no platform, no floor disc under the feet. "
             "Natural human anatomy with moderate shoulder width, relaxed sloping shoulders, "
             "anatomically correct separated hands, five clearly formed fingers on each hand, "
             "palms angled slightly toward the thighs, no clenched fists, no fused fingers. "
@@ -111,7 +116,9 @@ QUADRUPED_TEMPLATE = ("Full body 3D game animal concept art of {desc}. Single an
                       "standing naturally on all four legs, seen from a front three-quarter "
                       "view so that all four legs are clearly separate and fully visible "
                       "with visible gaps between them, no leg hidden or overlapping, "
-                      "tail visible, whole body in frame. Stylized PBR game-asset look, "
+                      "tail visible, whole body in frame, standing directly on the plain "
+                      "background with no base, no pedestal, no platform under the paws. "
+                      "Stylized PBR game-asset look, "
                       "clean plain light gray studio background, soft even lighting, "
                       "no shadows on background, no text, no watermark.")
 
