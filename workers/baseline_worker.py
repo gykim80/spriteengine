@@ -235,11 +235,6 @@ NORMAL_HEIGHT_RANGE = (1.2, 3.0)
 STANDARD_QUADRUPED_LENGTH = 1.4
 NORMAL_LENGTH_RANGE = (0.5, 3.0)
 
-# 체형 판별 임계: 코어(p10~p90) 체장/키 비율. 실측 — 휴머노이드 27종은 키가
-# 깊이의 3배 이상(비율 <= 0.33), 4족 개 픽스처는 1.6 — 1.25면 안전하게 갈린다.
-QUADRUPED_LENGTH_RATIO = 1.25
-
-
 def _core_extent(vals):
     """p10~p90 코어 범위 — A-pose 팔끝·꼬리끝 같은 극단값의 영향을 배제한다."""
     s = sorted(vals)
@@ -259,9 +254,14 @@ def _classify_body_type(all_pos):
     몸통은 등/배가 전장에 걸쳐 연속으로 지면에 닿는다. 확증 실패 시
     humanoid로 두어 기존 upright 검사(누움 검출)가 잡아내게 한다.
     """
+    # 1차 게이트: 코어 체장(Z) > 코어 키(Y). 실측 — 직립 휴머노이드 27종은
+    # 키가 깊이의 3배 이상이라(보폭 자세 포함) 절대 넘지 않고, 개(1.6배)는
+    # 물론 체장≈키인 말 체형도 코어 기준으로는 Z가 남는다(다리가 가늘어
+    # y 질량이 몸통에 몰리므로 코어 키 < 총 높이). 최종 확증은 아래 배 밑
+    # 갭 검사가 담당하므로 여기서는 최장축 여부만 거른다.
     cy = _core_extent([p[1] for p in all_pos]) or 1e-9
     cz = _core_extent([p[2] for p in all_pos])
-    if cz <= QUADRUPED_LENGTH_RATIO * cy:
+    if cz <= cy:
         return "humanoid"
     ys = [p[1] for p in all_pos]
     zs = [p[2] for p in all_pos]
@@ -564,14 +564,14 @@ def auto_rig(glb_path, output_path):
                 all_pos.extend(_read_vec3(gltf, bin_data, pid, "POSITION"))
     if not all_pos:
         return False
-    # 측방향 복원 4족(체장이 X축) 정렬: 코어 X가 최장이고 4족 비율을 넘으면
-    # yaw −90° 회전 후보를 만들어 보고, 배 밑 갭 확인까지 통과할 때만 버퍼를
-    # 실제로 회전한다 — T-pose 팔 벌린 휴머노이드는 확인 단계에서 걸러져
-    # 원본이 보존된다.
+    # 측방향 복원 4족(체장이 X축) 정렬: 코어 X가 최장축이면 yaw −90° 회전
+    # 후보를 만들어 보고, 배 밑 갭 확인까지 통과할 때만 버퍼를 실제로
+    # 회전한다 — T-pose 팔 벌린 휴머노이드는 확인 단계에서 걸러져 원본이
+    # 보존된다.
     cx_ext = _core_extent([p[0] for p in all_pos])
     cy_ext = _core_extent([p[1] for p in all_pos]) or 1e-9
     cz_ext = _core_extent([p[2] for p in all_pos])
-    if cx_ext > cz_ext and cx_ext > QUADRUPED_LENGTH_RATIO * cy_ext:
+    if cx_ext > cz_ext and cx_ext > cy_ext:
         rotated = [(-p[2], p[1], p[0]) for p in all_pos]  # yaw −90°: +X → +Z
         if _classify_body_type(rotated) == "quadruped":
             _rewrite_mesh_vec3(gltf, bin_data, lambda x, y, z: (-z, y, x))

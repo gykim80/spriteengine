@@ -478,13 +478,15 @@ class ScaleNormalizeTest(unittest.TestCase):
                                worker.STANDARD_CHARACTER_HEIGHT * 0.52, places=3)
 
 
-def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False, tail=True):
+def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False, tail=True,
+                       stretch=(1.0, 1.0, 1.0)):
     """개 형태의 4족 GLB — 수평 몸통(Z 장축) + 다리 4기둥 + 머리/꼬리.
 
     reverse=True면 Y축 180° 회전(x,z 부호 반전) — 머리가 −Z를 향하는
     역방향 복원 메시를 흉내 낸다. sideways=True면 추가로 yaw 90° 회전해
     체장이 X축을 따르는 측방향 복원 메시를 흉내 낸다. tail=False면 꼬리가
-    복원에서 뭉개져 사라진 메시를 흉내 낸다.
+    복원에서 뭉개져 사라진 메시를, stretch는 축별 비균등 비례(말=키 큰
+    체형 등)를 흉내 낸다.
     반환: (positions, part_of) — part_of[i]는 버텍스 i의 부위 라벨.
     """
     pts = []
@@ -492,7 +494,7 @@ def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False, tail=True
 
     def add(part, p):
         part_of.append(part)
-        x, y, z = p[0] * scale, p[1] * scale, p[2] * scale
+        x, y, z = (p[k] * scale * stretch[k] for k in range(3))
         if reverse:
             x, z = -x, -z
         if sideways:
@@ -698,6 +700,19 @@ class QuadrupedRigTest(unittest.TestCase):
               for f in range(acc["count"])]
         self.assertGreater(max(qy) - min(qy), 0.05,
                            "tail must actually sway, not stay rigid")
+
+    def test_horse_proportions_classified_and_rigged(self):
+        """체장≈키인 말 체형(다리 긴 4족)은 예전 1.25배 체장/키 비율 게이트에
+        걸려 휴머노이드로 오분류되던 케이스 — 코어 최장축 검사 + 배 밑 갭
+        확증으로 4족 리깅을 받아야 한다."""
+        src = os.path.join(self.tmp.name, "horse.glb")
+        out = os.path.join(self.tmp.name, "horse-rigged.glb")
+        pts, _ = make_quadruped_glb(src, stretch=(1.0, 1.5, 1.0))
+        h = max(p[1] for p in pts) - min(p[1] for p in pts)
+        length = max(p[2] for p in pts) - min(p[2] for p in pts)
+        self.assertLess(length, 1.25 * h, "fixture must be horse-proportioned")
+        self.assertEqual(worker._classify_body_type(pts), "quadruped")
+        self.assertEqual(worker.auto_rig(src, out), "quadruped")
 
     def test_tailless_dog_rigs_and_animates(self):
         """복원에서 꼬리가 뭉개져 사라진 개도 4족 리깅과 모션 베이킹이
