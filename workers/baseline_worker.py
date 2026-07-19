@@ -229,14 +229,44 @@ def _bake_mesh_node_transform(gltf, bin_data):
 # 표준 키로 정규화한다 (정상 출력은 no-op — 기존 산출물 불변).
 STANDARD_CHARACTER_HEIGHT = 1.987
 NORMAL_HEIGHT_RANGE = (1.2, 3.0)
+# 4족 동물은 키가 아니라 체장(코~꼬리, Z 범위)이 대표 치수다. 중형견 전장
+# ~1.4m를 표준으로, 인간 키 기준(1.2~3.0)을 4족에 적용하면 어깨높이 0.6m대의
+# 정상 개가 2배 이상 거인화되므로(실측: 0.88m 개 → 2.26배) 축과 범위를 분리한다.
+STANDARD_QUADRUPED_LENGTH = 1.4
+NORMAL_LENGTH_RANGE = (0.5, 3.0)
+
+# 체형 판별 임계: 코어(p10~p90) 체장/키 비율. 실측 — 휴머노이드 27종은 키가
+# 깊이의 3배 이상(비율 <= 0.33), 4족 개 픽스처는 1.6 — 1.25면 안전하게 갈린다.
+QUADRUPED_LENGTH_RATIO = 1.25
 
 
-def _normalize_character_scale(gltf, bin_data):
-    """캐릭터 키(Y 범위)가 정상 범위 밖이면 표준 키로 균등 스케일한다.
+def _core_extent(vals):
+    """p10~p90 코어 범위 — A-pose 팔끝·꼬리끝 같은 극단값의 영향을 배제한다."""
+    s = sorted(vals)
+    return s[min(len(s) - 1, int(len(s) * 0.9))] - s[int(len(s) * 0.1)]
 
+
+def _classify_body_type(all_pos):
+    """버텍스 분포로 humanoid/quadruped를 판별한다.
+
+    직립 캐릭터는 키(Y)가, 4족 동물은 체장(Z)이 코어 최장축이다.
+    _bake_mesh_node_transform() 이후(Y축=수직 보장) 좌표를 전제로 한다.
+    """
+    cy = _core_extent([p[1] for p in all_pos]) or 1e-9
+    cz = _core_extent([p[2] for p in all_pos])
+    return "quadruped" if cz > QUADRUPED_LENGTH_RATIO * cy else "humanoid"
+
+
+def _normalize_character_scale(gltf, bin_data, body_type="humanoid"):
+    """캐릭터 대표 치수가 정상 범위 밖이면 표준 치수로 균등 스케일한다.
+
+    대표 치수는 체형별로 다르다 — 휴머노이드는 키(Y 범위), 4족은 체장(Z 범위).
     _bake_mesh_node_transform() 이후(Y축=키 보장) 호출을 전제로 한다.
     법선은 균등 스케일에 불변이므로 POSITION만 수정한다. 적용 배율을 반환한다.
     """
+    axis, target, (lo, hi) = ((2, STANDARD_QUADRUPED_LENGTH, NORMAL_LENGTH_RANGE)
+                              if body_type == "quadruped"
+                              else (1, STANDARD_CHARACTER_HEIGHT, NORMAL_HEIGHT_RANGE))
     pos_accessors = []
     seen = set()
     ys = []
@@ -247,13 +277,13 @@ def _normalize_character_scale(gltf, bin_data):
                 continue
             seen.add(aid)
             pos_accessors.append(aid)
-            ys.extend(p[1] for p in _read_vec3(gltf, bin_data, aid, "POSITION"))
+            ys.extend(p[axis] for p in _read_vec3(gltf, bin_data, aid, "POSITION"))
     if not ys:
         return 1.0
     height = max(ys) - min(ys)
-    if height <= 0 or NORMAL_HEIGHT_RANGE[0] <= height <= NORMAL_HEIGHT_RANGE[1]:
+    if height <= 0 or lo <= height <= hi:
         return 1.0
-    s = STANDARD_CHARACTER_HEIGHT / height
+    s = target / height
     for aid in pos_accessors:
         acc = gltf["accessors"][aid]
         view = gltf["bufferViews"][acc["bufferView"]]
@@ -329,9 +359,102 @@ def _cut_fused_bridges(gltf, bin_data, prim, doms):
     return cut
 
 
-def auto_rig(glb_path, output_path):
-    """Static mesh에 바운딩박스 기반 휴머노이드 skeleton을 추가한다.
+def _quadruped_joint_layout(all_pos):
+    """4족 메시에서 수평 척추 + 다리 4체인 + 머리/꼬리 스켈레톤 배치를 실측한다.
 
+    조인트 명명은 휴머노이드와 공유한다 — 앞다리=Arm 체인, 뒷다리=Leg 체인.
+    이렇게 하면 HY-Motion SMPL 리타게팅(SMPL_TO_RIG)이 인간 팔 스윙을
+    앞다리에, 다리 스윙을 뒷다리에 그대로 이식해 대각 보행(trot)이 되고,
+    좌우 대칭 검증(EXPECTED_LEFT_RIGHT_PAIRS)도 재사용된다.
+
+    배치는 bbox 비율 하드코딩이 아니라 실측 클러스터 기반이다: 하단 40%
+    버텍스를 전/후로 나눠 앞·뒷다리 z 위치를 얻고, 앞다리보다 전방 버텍스
+    원심으로 머리를, 뒷다리보다 후방 버텍스 원심으로 꼬리를 배치한다.
+    반환: (JDEF, BONE_CHILD, tips)
+    """
+    xs = [p[0] for p in all_pos]; ys = [p[1] for p in all_pos]; zs = [p[2] for p in all_pos]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    min_z, max_z = min(zs), max(zs)
+    cx = (min_x + max_x) / 2
+    cz = (min_z + max_z) / 2
+    h = (max_y - min_y) or 1.0
+    length = (max_z - min_z) or 1.0
+
+    def _median(vals):
+        s = sorted(vals)
+        return s[len(s) // 2]
+
+    # 다리 클러스터: 하단 40% 버텍스를 z 중앙 기준 앞/뒤로 분할
+    low = [p for p in all_pos if p[1] < min_y + 0.4 * h]
+    if len(low) < 8:
+        low = sorted(all_pos, key=lambda p: p[1])[:max(8, len(all_pos) // 5)]
+    front = [p for p in low if p[2] >= cz]
+    rear = [p for p in low if p[2] < cz]
+    front_z = _median([p[2] for p in front]) if front else cz + 0.25 * length
+    rear_z = _median([p[2] for p in rear]) if rear else cz - 0.25 * length
+    leg_x = _median([abs(p[0] - cx) for p in low]) or 0.25 * (max_x - min_x)
+
+    spine_y = min_y + 0.55 * h            # 수평 척추 라인 (몸통 중심 높이)
+    top_y = min_y + 0.40 * h              # 다리 상부 (몸통 밑면)
+    mid_y = min_y + 0.22 * h              # 무릎/팔꿈치
+    foot_y = min_y + 0.06 * h             # 발목
+
+    # 머리: 앞다리보다 전방 버텍스 원심 (개·말 등은 머리가 몸통 위-앞)
+    head_pts = [p for p in all_pos if p[2] > front_z + 0.08 * length]
+    if head_pts:
+        head = (cx, sum(p[1] for p in head_pts) / len(head_pts),
+                sum(p[2] for p in head_pts) / len(head_pts))
+        nose = (cx, head[1], max(p[2] for p in head_pts))
+    else:
+        head = (cx, min_y + 0.8 * h, front_z + 0.15 * length)
+        nose = (cx, head[1], max_z)
+
+    JDEF = [
+        ("Hips",         (cx, spine_y, rear_z), None),
+        ("Spine",        (cx, spine_y, (front_z + rear_z) / 2), "Hips"),
+        ("Chest",        (cx, spine_y, front_z), "Spine"),
+        ("Head",         head, "Chest"),
+        ("LeftUpLeg",    (cx + leg_x, top_y, rear_z), "Hips"),
+        ("LeftLeg",      (cx + leg_x, mid_y, rear_z), "LeftUpLeg"),
+        ("LeftFoot",     (cx + leg_x, foot_y, rear_z), "LeftLeg"),
+        ("RightUpLeg",   (cx - leg_x, top_y, rear_z), "Hips"),
+        ("RightLeg",     (cx - leg_x, mid_y, rear_z), "RightUpLeg"),
+        ("RightFoot",    (cx - leg_x, foot_y, rear_z), "RightLeg"),
+        ("LeftArm",      (cx + leg_x, top_y, front_z), "Chest"),
+        ("LeftForeArm",  (cx + leg_x, mid_y, front_z), "LeftArm"),
+        ("RightArm",     (cx - leg_x, top_y, front_z), "Chest"),
+        ("RightForeArm", (cx - leg_x, mid_y, front_z), "RightArm"),
+    ]
+    BONE_CHILD = {
+        "Hips": "Spine", "Spine": "Chest", "Chest": "Head",
+        "LeftUpLeg": "LeftLeg", "LeftLeg": "LeftFoot",
+        "RightUpLeg": "RightLeg", "RightLeg": "RightFoot",
+        "LeftArm": "LeftForeArm", "RightArm": "RightForeArm",
+    }
+    tips = {
+        "Head": nose,
+        "LeftFoot": (cx + leg_x, min_y, rear_z),
+        "RightFoot": (cx - leg_x, min_y, rear_z),
+        "LeftForeArm": (cx + leg_x, min_y, front_z),
+        "RightForeArm": (cx - leg_x, min_y, front_z),
+    }
+    # 꼬리: 뒷다리보다 후방 버텍스가 있으면 Tail 조인트 추가 (없으면 생략)
+    tail_pts = [p for p in all_pos if p[2] < rear_z - 0.08 * length]
+    if tail_pts:
+        ty = sum(p[1] for p in tail_pts) / len(tail_pts)
+        tz = sum(p[2] for p in tail_pts) / len(tail_pts)
+        JDEF.append(("Tail", (cx, ty, tz), "Hips"))
+        tips["Tail"] = (cx, ty, min(p[2] for p in tail_pts))
+    return JDEF, BONE_CHILD, tips
+
+
+def auto_rig(glb_path, output_path):
+    """Static mesh에 실측 기반 skeleton을 추가한다 (휴머노이드/4족 자동 판별).
+
+    코어 축 비율로 체형을 판별해 — 직립 메시는 휴머노이드 14조인트, 체장(Z)이
+    키(Y)보다 긴 메시는 4족 스켈레톤(수평 척추, 앞다리=Arm 체인, 뒷다리=Leg
+    체인, 실측 다리 클러스터 배치)을 받는다.
     이미 skins가 있으면 False(패스스루)를 반환한다. 성공 시 output_path에
     JOINTS_0/WEIGHTS_0가 추가된 skinned GLB를 쓰고 True를 반환한다.
     """
@@ -345,11 +468,8 @@ def auto_rig(glb_path, output_path):
     # 스킨을 추가하면 메시 노드 자신의 TRS는 렌더러에서 무시되므로, 관절
     # 배치를 계산하기 전에 노드 트랜스폼을 버텍스에 구워 넣어 정규화한다.
     _bake_mesh_node_transform(gltf, bin_data)
-    # 복원 스케일 이상치(표준 키 대비 수배 차이)는 모션 루트 이동까지
-    # 왜곡하므로, 관절 배치 전에 표준 키로 정규화한다.
-    _normalize_character_scale(gltf, bin_data)
 
-    # 1. 전체 메시 AABB -------------------------------------------------
+    # 1. 전체 메시 버텍스 → 체형 판별 → 표준 치수 정규화 -------------------
     all_pos = []
     for mesh in gltf.get("meshes", []):
         for prim in mesh.get("primitives", []):
@@ -358,6 +478,12 @@ def auto_rig(glb_path, output_path):
                 all_pos.extend(_read_vec3(gltf, bin_data, pid, "POSITION"))
     if not all_pos:
         return False
+    body_type = _classify_body_type(all_pos)
+    # 복원 스케일 이상치(표준 치수 대비 수배 차이)는 모션 루트 이동까지
+    # 왜곡하므로, 관절 배치 전에 체형별 표준 치수로 정규화한다.
+    s = _normalize_character_scale(gltf, bin_data, body_type)
+    if s != 1.0:
+        all_pos = [(p[0] * s, p[1] * s, p[2] * s) for p in all_pos]
 
     xs = [p[0] for p in all_pos]; ys = [p[1] for p in all_pos]
     min_x, max_x = min(xs), max(xs)
@@ -372,22 +498,25 @@ def auto_rig(glb_path, output_path):
     # 따른다. 반대로 배치하면 리타게팅 시 SMPL 좌팔 회전(수평→매달림,
     # rot(Z,−75°)류)이 −X 팔에 적용돼 정확히 미러 — 팔이 위로 꺾여 머리 옆에
     # 붙는 증상이 난다 (실측: idle 팔 elevation 기대 −75° ↔ 버그 +75°).
-    JDEF = [
-        ("Hips",         (cx,          min_y + h*.52, cz), None),
-        ("Spine",        (cx,          min_y + h*.62, cz), "Hips"),
-        ("Chest",        (cx,          min_y + h*.73, cz), "Spine"),
-        ("Head",         (cx,          min_y + h*.88, cz), "Chest"),
-        ("LeftUpLeg",    (cx + w*.13,  min_y + h*.48, cz), "Hips"),
-        ("LeftLeg",      (cx + w*.13,  min_y + h*.27, cz), "LeftUpLeg"),
-        ("LeftFoot",     (cx + w*.13,  min_y + h*.04, cz), "LeftLeg"),
-        ("RightUpLeg",   (cx - w*.13,  min_y + h*.48, cz), "Hips"),
-        ("RightLeg",     (cx - w*.13,  min_y + h*.27, cz), "RightUpLeg"),
-        ("RightFoot",    (cx - w*.13,  min_y + h*.04, cz), "RightLeg"),
-        ("LeftArm",      (cx + w*.30,  min_y + h*.73, cz), "Chest"),
-        ("LeftForeArm",  (cx + w*.44,  min_y + h*.62, cz), "LeftArm"),
-        ("RightArm",     (cx - w*.30,  min_y + h*.73, cz), "Chest"),
-        ("RightForeArm", (cx - w*.44,  min_y + h*.62, cz), "RightArm"),
-    ]
+    if body_type == "quadruped":
+        JDEF, BONE_CHILD, tips = _quadruped_joint_layout(all_pos)
+    else:
+        JDEF = [
+            ("Hips",         (cx,          min_y + h*.52, cz), None),
+            ("Spine",        (cx,          min_y + h*.62, cz), "Hips"),
+            ("Chest",        (cx,          min_y + h*.73, cz), "Spine"),
+            ("Head",         (cx,          min_y + h*.88, cz), "Chest"),
+            ("LeftUpLeg",    (cx + w*.13,  min_y + h*.48, cz), "Hips"),
+            ("LeftLeg",      (cx + w*.13,  min_y + h*.27, cz), "LeftUpLeg"),
+            ("LeftFoot",     (cx + w*.13,  min_y + h*.04, cz), "LeftLeg"),
+            ("RightUpLeg",   (cx - w*.13,  min_y + h*.48, cz), "Hips"),
+            ("RightLeg",     (cx - w*.13,  min_y + h*.27, cz), "RightUpLeg"),
+            ("RightFoot",    (cx - w*.13,  min_y + h*.04, cz), "RightLeg"),
+            ("LeftArm",      (cx + w*.30,  min_y + h*.73, cz), "Chest"),
+            ("LeftForeArm",  (cx + w*.44,  min_y + h*.62, cz), "LeftArm"),
+            ("RightArm",     (cx - w*.30,  min_y + h*.73, cz), "Chest"),
+            ("RightForeArm", (cx - w*.44,  min_y + h*.62, cz), "RightArm"),
+        ]
     JNAMES = [j[0] for j in JDEF]
     JWORLD = {j[0]: j[1] for j in JDEF}
 
@@ -421,9 +550,9 @@ def auto_rig(glb_path, output_path):
     })
     ibm_acc = len(gltf["accessors"]) - 1
 
-    # skin 등록
+    # skin 등록 — 이름이 체형 마커를 겸한다 (검증기가 upright 기준 분기에 사용)
     gltf["skins"] = [{
-        "name": "AutoHumanoidRig",
+        "name": "AutoQuadrupedRig" if body_type == "quadruped" else "AutoHumanoidRig",
         "joints": [name_to_node[n] for n in JNAMES],
         "inverseBindMatrices": ibm_acc,
         "skeleton": name_to_node["Hips"],
@@ -434,20 +563,22 @@ def auto_rig(glb_path, output_path):
     # 갈려 애니메이션 시 팔이 몸통에서 찢어져 보였다. 각 조인트가 지배하는
     # 본(조인트→자식 조인트, 말단은 연장 팁)까지의 거리로 배정하고 가까운 두
     # 본을 역제곱 거리로 블렌딩해 경계를 연속적으로 만든다.
-    BONE_CHILD = {
-        "Hips": "Spine", "Spine": "Chest", "Chest": "Head",
-        "LeftUpLeg": "LeftLeg", "LeftLeg": "LeftFoot",
-        "RightUpLeg": "RightLeg", "RightLeg": "RightFoot",
-        "LeftArm": "LeftForeArm", "RightArm": "RightForeArm",
-    }
-    tips = {
-        "Head": (cx, max_y, cz),
-        "LeftFoot": (JWORLD["LeftFoot"][0], min_y, JWORLD["LeftFoot"][2]),
-        "RightFoot": (JWORLD["RightFoot"][0], min_y, JWORLD["RightFoot"][2]),
-    }
-    for side in ("Left", "Right"):
-        a, f = JWORLD[side + "Arm"], JWORLD[side + "ForeArm"]
-        tips[side + "ForeArm"] = tuple(f[k] + (f[k] - a[k]) for k in range(3))  # 1차: 직선 연장
+    # (4족은 BONE_CHILD/tips가 _quadruped_joint_layout에서 실측으로 나온다.)
+    if body_type != "quadruped":
+        BONE_CHILD = {
+            "Hips": "Spine", "Spine": "Chest", "Chest": "Head",
+            "LeftUpLeg": "LeftLeg", "LeftLeg": "LeftFoot",
+            "RightUpLeg": "RightLeg", "RightLeg": "RightFoot",
+            "LeftArm": "LeftForeArm", "RightArm": "RightForeArm",
+        }
+        tips = {
+            "Head": (cx, max_y, cz),
+            "LeftFoot": (JWORLD["LeftFoot"][0], min_y, JWORLD["LeftFoot"][2]),
+            "RightFoot": (JWORLD["RightFoot"][0], min_y, JWORLD["RightFoot"][2]),
+        }
+        for side in ("Left", "Right"):
+            a, f = JWORLD[side + "Arm"], JWORLD[side + "ForeArm"]
+            tips[side + "ForeArm"] = tuple(f[k] + (f[k] - a[k]) for k in range(3))  # 1차: 직선 연장
 
     def _bones(t):
         return [(ji, JWORLD[name], t.get(name) or JWORLD[BONE_CHILD[name]])
