@@ -340,6 +340,7 @@ def _cluster_xz(pts, radius):
 # 최적을 고르는 점수를 제공한다.
 LEG_SEP_BAND = 0.05      # pair separation 스캔 밴드 높이 (h 비율)
 LEG_SEP_SCAN_TOP = 0.5   # 지면에서 50% 높이까지만 스캔
+LEG_WEB_PENALTY = 2.0    # 다리 사이 웹(막) 밀도 페널티 가중치
 
 
 def leg_quality(glb_path):
@@ -348,10 +349,12 @@ def leg_quality(glb_path):
     리깅 전 원시 메시에도 동작한다(방향 정규화 전이므로 몸 길이 축을
     수평 범위가 더 긴 축으로 자동 판정).
       - 접지 다리 기둥 4개 미만 또는 4사분면 미커버 → score=-1.0 (실격)
-      - score = front_sep + rear_sep + 0.5 * balance
+      - score = front_sep + rear_sep + 0.5 * balance - 2.0 * (web_f + web_r)
         · pair separation: 전/후 다리쌍의 좌/우가 별도 기둥으로 유지되는
           최대 높이 비율 — 웹/융합으로 뭉개진 복원은 낮은 높이에서 붙는다
         · balance: 접지 기둥 질량 min/median — 퇴화 다리가 있으면 낮다
+        · web: 다리쌍 사이 가운데 1/3 회랑의 점 밀도(웹 점/다리 점) —
+          실측: 웹 결함 개는 front 0.054/rear 0.048, 정상은 ~0.04/0.01
     """
     gltf, bin_data = worker._read_glb(glb_path)
     all_pos = []
@@ -419,9 +422,40 @@ def leg_quality(glb_path):
             elif band >= 1:
                 break  # 다리가 붙기 시작한 높이 위쪽은 스캔 불필요
         sep[key] = round(top, 3)
-    score = sep["front"] + sep["rear"] + 0.5 * balance
+
+    # 3) 다리쌍 사이 웹(막) 밀도 — 뭉개진 복원은 좌/우 다리 사이 회랑을
+    #    얇은 막이 채운다. 접지 기둥 중심 사이 가운데 1/3 회랑(체장 방향
+    #    ±25% gap 창, 높이 5~35%)의 점 수를 다리 점 수로 나눈다.
+    Lax = 2 if li == 1 else 0          # 체장 축
+    lat = 0 if li == 1 else 2          # 측방향 축
+    latc = xc if lat == 0 else zc
+    web = {}
+    for front, key in ((True, "front"), (False, "rear")):
+        g = [p for p in all_pos if p[1] < min_y + LEG_GROUND_BAND * h
+             and (p[Lax] > lc) == front]
+        gl = [p for p in g if p[lat] < latc]
+        gr = [p for p in g if p[lat] >= latc]
+        if not gl or not gr:
+            web[key] = 0.0
+            continue
+        l0 = sum(p[lat] for p in gl) / len(gl)
+        l1 = sum(p[lat] for p in gr) / len(gr)
+        lg = sum(p[Lax] for p in g) / len(g)
+        gap = l1 - l0
+        lo, hi = l0 + gap / 3.0, l1 - gap / 3.0
+        band = [p for p in all_pos
+                if min_y + 0.05 * h <= p[1] < min_y + 0.35 * h
+                and (p[Lax] > lc) == front
+                and lg - 0.25 * abs(gap) <= p[Lax] <= lg + 0.25 * abs(gap)]
+        web_n = sum(1 for p in band if lo <= p[lat] <= hi)
+        leg_n = len(band) - web_n
+        web[key] = round(web_n / max(1, leg_n), 3)
+
+    score = (sep["front"] + sep["rear"] + 0.5 * balance
+             - LEG_WEB_PENALTY * (web["front"] + web["rear"]))
     return {"score": round(score, 3), "columns": len(cols), "quadrants": len(quadrants),
-            "balance": round(balance, 3), "front_sep": sep["front"], "rear_sep": sep["rear"]}
+            "balance": round(balance, 3), "front_sep": sep["front"], "rear_sep": sep["rear"],
+            "front_web": web["front"], "rear_web": web["rear"]}
 
 
 # 팔 elevation 중앙값 상한(°): 정상 모션 셋은 팔이 대부분 매달림(−60~−85°)이고

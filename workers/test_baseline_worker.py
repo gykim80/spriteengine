@@ -1156,6 +1156,26 @@ class LegQualityTest(unittest.TestCase):
         q = self.vc.leg_quality(glb)
         self.assertEqual(q["score"], -1.0, q)
 
+    def test_web_between_legs_lowers_score(self):
+        """다리쌍 사이를 채운 웹(막) 지오메트리는 점수를 깎아야 한다 —
+        실측 회귀: 웹 결함 개(dog2)가 정상 후보와 분리 지표 동률이라
+        선별이 불가능했던 문제를 web 밀도 페널티가 해소한다."""
+        clean = os.path.join(self.tmp.name, "web-clean.glb")
+        pts, _ = make_quadruped_glb(clean)
+        webbed = os.path.join(self.tmp.name, "webbed.glb")
+        # 접지 밴드(y<0.15h≈0.13) 위쪽만 채운다 — 지면까지 닿는 웹은 기둥
+        # 병합으로 이미 실격(-1.0) 처리되므로 페널티 경로가 잡을 대상은
+        # 공중에 뜬 막이다.
+        web = [(x / 100.0, y / 100.0, z / 100.0)
+               for x in (-4, 0, 4) for y in (15, 20, 25)
+               for z in (28, 30, 32)]  # 앞다리쌍(x=±0.14, z≈0.30) 사이 막
+        self._write_points_glb(webbed, pts + web)
+        qc = self.vc.leg_quality(clean)
+        qw = self.vc.leg_quality(webbed)
+        self.assertEqual(qc["front_web"], 0.0, qc)
+        self.assertGreater(qw["front_web"], 0.0, qw)
+        self.assertLess(qw["score"], qc["score"])
+
     def test_zup_node_rotation_matches_yup(self):
         """+90° X 노드 회전(원시 Hunyuan 복원)이 적용된 Z-up 데이터도
         Y-up 데이터와 동일한 점수를 받아야 한다."""

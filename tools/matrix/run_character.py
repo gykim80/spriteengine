@@ -71,69 +71,80 @@ def chunk(prompts, max_size=20):
     return [prompts[i:i + size] for i in range(0, n, size)]
 
 
-def ensure_image(name, desc, char_set):
-    png = mp.CHARS / f"{name}.png"
-    if png.exists():
-        print(f"[image] {name}: exists, skip", flush=True)
-        return png
-    print(f"[image] {name}: generating via gpt-image-2", flush=True)
-    gen_characters.generate(name, desc)
-    return png
+# 4족은 단일 이미지 복원이 가려진 쪽 다리를 웹/융합으로 환각하기 쉽다
+# (실측: 3/4 시점 시바견 → 앞다리 웹). 실측 결과 RunPod Hunyuan 엔드포인트는
+# seed가 셰이프에 반영되지 않아(시드 3개 POSITION/텍스처 해시 완전 동일)
+# 시드 변주는 무의미했다 — 환각의 실제 변동원은 원본 이미지이므로, 4족은
+# 이미지를 여러 장 생성해 각각 복원한 뒤 leg_quality 최고 후보를 선택한다.
+QUAD_IMAGE_CANDIDATES = 3
 
 
-# 4족은 단일 이미지 복원이 가려진 쪽 다리를 웹/융합으로 환각하기 쉬우므로
-# (실측: 3/4 시점 시바견 → 앞다리 웹), 시드 여러 개로 병렬 복원해
-# leg_quality 점수가 가장 높은 후보를 자동 선택한다.
-RECON_SEEDS = (1234, 5678, 9012)
+def image_variants(name, count=QUAD_IMAGE_CANDIDATES):
+    return [name] + [f"{name}-v{i}" for i in range(2, count + 1)]
 
 
-def reconstruct(name, png, quadruped=False):
+def ensure_images(name, desc, char_set):
+    names = image_variants(name) if char_set == "q" else [name]
+    pngs = []
+    for n in names:
+        png = mp.CHARS / f"{n}.png"
+        if png.exists():
+            print(f"[image] {n}: exists, skip", flush=True)
+        else:
+            print(f"[image] {n}: generating via gpt-image-2", flush=True)
+            gen_characters.generate(n, desc)
+        pngs.append(png)
+    return pngs
+
+
+def reconstruct(name, pngs, quadruped=False):
     ws = mp.WS / name
     out = ws / "reconstruct" / "hunyuan3d21.glb"
     if out.exists():
         print(f"[recon] {name}: exists, skip", flush=True)
         return out
-    seeds = RECON_SEEDS if quadruped else RECON_SEEDS[:1]
     jobs = {}
-    for seed in seeds:
+    for png in pngs:
         payload = {"input": {
-            "image": base64.b64encode(png.read_bytes()).decode(), "seed": seed,
+            "image": base64.b64encode(png.read_bytes()).decode(), "seed": 1234,
             "steps": 30, "guidance_scale": 5.0, "octree_resolution": 256,
             "face_count": 40000, "texture": True, "max_num_view": 6,
             "texture_resolution": 512,
         }}
         job = mp.rp("POST", "run", payload, timeout=120)
-        jobs[f"{name}-s{seed}"] = job["id"]
-        print(f"[recon] {name}: submitted seed={seed} {job['id']}", flush=True)
+        jobs[png.stem] = job["id"]
+        print(f"[recon] {name}: submitted image={png.stem} {job['id']}", flush=True)
     results = mp.poll(jobs)
     out.parent.mkdir(parents=True, exist_ok=True)
     candidates = []
-    for seed in seeds:
-        result = results.get(f"{name}-s{seed}")
+    for png in pngs:
+        result = results.get(png.stem)
         if not result or not result.get("glb_base64"):
-            print(f"[recon] {name}: seed={seed} FAILED {str((result or {}).get('error'))[:200]}", flush=True)
+            print(f"[recon] {name}: image={png.stem} FAILED {str((result or {}).get('error'))[:200]}", flush=True)
             continue
         glb = base64.b64decode(result["glb_base64"])
         assert glb[:4] == b"glTF"
-        cand = out.parent / f"candidate-s{seed}.glb"
+        cand = out.parent / f"candidate-{png.stem}.glb"
         cand.write_bytes(glb)
         score = 0.0
         if quadruped:
             q = validate_character.leg_quality(str(cand))
             score = q["score"]
-            print(f"[recon] {name}: seed={seed} {len(glb)} bytes leg_quality={q}", flush=True)
+            print(f"[recon] {name}: image={png.stem} {len(glb)} bytes leg_quality={q}", flush=True)
         else:
-            print(f"[recon] {name}: seed={seed} {len(glb)} bytes textured={result.get('textured')}", flush=True)
-        candidates.append((score, seed, cand))
+            print(f"[recon] {name}: image={png.stem} {len(glb)} bytes textured={result.get('textured')}", flush=True)
+        candidates.append((score, png.stem, cand, png))
     if not candidates:
-        sys.exit(f"[recon] {name}: all reconstruction seeds FAILED")
-    best_score, best_seed, best = max(candidates)
+        sys.exit(f"[recon] {name}: all reconstructions FAILED")
+    best_score, best_stem, best, best_png = max(candidates)
     if quadruped and best_score < 0:
         sys.exit(f"[recon] {name}: no candidate reconstructed 4 sound leg columns "
-                 f"— regenerate the source image and retry")
+                 f"— regenerate the source images and retry")
     out.write_bytes(best.read_bytes())
+    # 앱 등록 시 실제 채택된 원본 이미지를 쓰도록 함께 보존한다.
+    (out.parent / "source.png").write_bytes(best_png.read_bytes())
     if quadruped:
-        print(f"[recon] {name}: selected seed={best_seed} (leg_quality score={best_score})", flush=True)
+        print(f"[recon] {name}: selected image={best_stem} (leg_quality score={best_score})", flush=True)
     return out
 
 
@@ -211,7 +222,10 @@ def register_in_app(name, retopo_path, rig_path, motion_path, export_path, anima
     recon_src = mp.WS / name / "reconstruct" / "hunyuan3d21.glb"
     (proj / "reconstruct").mkdir(parents=True, exist_ok=True)
     (proj / "reconstruct" / "hunyuan3d21.glb").write_bytes(recon_src.read_bytes())
-    png_src = mp.CHARS / f"{name}.png"
+    # 멀티이미지 복원이 채택한 원본이 있으면 그것을 등록한다.
+    png_src = mp.WS / name / "reconstruct" / "source.png"
+    if not png_src.exists():
+        png_src = mp.CHARS / f"{name}.png"
     (proj / "source.png").write_bytes(png_src.read_bytes())
 
     job = {
@@ -261,8 +275,8 @@ def main():
     desc = pool[args.name]
 
     mp.WS.mkdir(parents=True, exist_ok=True)
-    png = ensure_image(args.name, desc, args.set)
-    recon_glb = reconstruct(args.name, png, quadruped=(args.set == "q"))
+    pngs = ensure_images(args.name, desc, args.set)
+    recon_glb = reconstruct(args.name, pngs, quadruped=(args.set == "q"))
     retopo_path, rig_path, body_type = retopo_and_rig(args.name, recon_glb)
     generate_motion(args.name)
     motion_path, animations, model = bake_and_validate(args.name, rig_path)

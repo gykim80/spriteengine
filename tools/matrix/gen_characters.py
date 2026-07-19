@@ -104,9 +104,11 @@ QUADRUPED_TEMPLATE = ("Full body 3D game animal concept art of {desc}. Single an
 
 
 def generate(name, desc):
-    tpl = QUADRUPED_TEMPLATE if name in CHARACTERS_QUADRUPED else TEMPLATE
+    # 멀티이미지 후보(name-v2, name-v3 …)도 원본과 같은 템플릿을 쓴다.
+    base = name.split("-v", 1)[0]
+    tpl = QUADRUPED_TEMPLATE if base in CHARACTERS_QUADRUPED else TEMPLATE
     # 4족은 몸이 가로로 길어 가로형 캔버스가 잘림 없이 담긴다.
-    size = "1536x1024" if name in CHARACTERS_QUADRUPED else "1024x1536"
+    size = "1536x1024" if base in CHARACTERS_QUADRUPED else "1024x1536"
     body = json.dumps({
         "model": "gpt-image-2", "prompt": tpl.format(desc=desc),
         "size": size, "quality": "medium", "n": 1,
