@@ -18,7 +18,7 @@ export default function CharacterViewport({playing,clip,speed,time,showSkeleton,
   const renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.setSize(el.clientWidth,el.clientHeight); renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFShadowMap; renderer.outputColorSpace=THREE.SRGBColorSpace; el.appendChild(renderer.domElement);
   scene.add(new THREE.HemisphereLight(0xffffff,0xdfe6f0,2.3)); const key=new THREE.DirectionalLight(0xfff4e8,3.2); key.position.set(3,6,4); key.castShadow=true; key.shadow.mapSize.set(2048,2048); scene.add(key); const rim=new THREE.DirectionalLight(0xbcd0ff,1.6);rim.position.set(-4,3,-4);scene.add(rim);
   const floor=new THREE.Mesh(new THREE.PlaneGeometry(24,24),new THREE.MeshStandardMaterial({color:0xe7ebf2,roughness:1})); floor.rotation.x=-Math.PI/2; floor.receiveShadow=true; scene.add(floor); const grid=new THREE.GridHelper(24,48,0xb9c3d4,0xd8dfeb);grid.position.y=.004;scene.add(grid);
-  const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.target.set(0,1,0);controls.minDistance=2;controls.maxDistance=10;
+  const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.target.set(0,1,0);controls.minDistance=2;controls.maxDistance=10;controls.enablePan=false; // 타깃은 팔로잉이 관리하므로 팬 비활성 (회전·줌만)
   let mixer:THREE.AnimationMixer|undefined, action:THREE.AnimationAction|undefined, model:THREE.Object3D|undefined, helper:THREE.SkeletonHelper|undefined, clips:THREE.AnimationClip[]=[]; let active=''; let duration=0; let disposed=false;
   let boneMap:BoneMap={};
   // 카메라 팔로잉: 힙스 본 월드 XZ를 추적해 카메라·타깃을 함께 이동 (궤도 시점 유지)
