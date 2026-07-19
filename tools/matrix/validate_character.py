@@ -67,6 +67,13 @@ def _read_accessor_floats(gltf, bin_data, acc_index, width):
             for i in range(acc["count"])]
 
 
+def _rig_type(gltf):
+    """auto_rig가 skin 이름에 남긴 체형 마커 — 4족이면 upright 기준이 다르다."""
+    skins = gltf.get("skins") or []
+    name = skins[0].get("name", "") if skins else ""
+    return "quadruped" if name == "AutoQuadrupedRig" else "humanoid"
+
+
 def check_upright(gltf, bin_data):
     issues = []
     all_pos = []
@@ -90,18 +97,27 @@ def check_upright(gltf, bin_data):
     # — 실제 "누워있음" 버그는 core 기준으로도 3배 이상 차이가 나므로 여전히 잡힌다.
     core = {axis: _percentile(vals, 90) - _percentile(vals, 10)
             for axis, vals in (("x", xs), ("y", ys), ("z", zs))}
-    if not (core["y"] > 1.15 * core["x"] and core["y"] > 1.15 * core["z"]):
-        issues.append(f"core-body Y range ({core['y']:.3f}, p10-p90) is not clearly the tallest axis "
-                       f"vs X={core['x']:.3f} Z={core['z']:.3f} — character may be lying down")
-    # 평면 카드/부조(relief) 복원 실패 검출: 실측(20종)에서 정상 캐릭터의
-    # 최소 수평축/키 비율은 >= 0.125, 카드로 복원된 실패 사례는 0.007이었다
-    # — 0.06이면 2배 마진으로 안전하게 분리된다.
-    depth_ratio = min(core["x"], core["z"]) / core["y"] if core["y"] > 0 else 0.0
+    rig_type = _rig_type(gltf)
+    if rig_type == "quadruped":
+        # 4족 정상 자세: 체장(Z)이 가장 긴 축, 좌우 폭(X)보다 명확히 길어야 함.
+        if not (core["z"] >= core["y"] and core["z"] > 1.15 * core["x"]):
+            issues.append(f"quadruped core-body Z length ({core['z']:.3f}, p10-p90) is not the longest axis "
+                           f"vs X={core['x']:.3f} Y={core['y']:.3f} — animal may be tipped over")
+        # 평면 카드 검출은 체장 대비 나머지 두 축으로 판정
+        depth_ratio = min(core["x"], core["y"]) / core["z"] if core["z"] > 0 else 0.0
+    else:
+        if not (core["y"] > 1.15 * core["x"] and core["y"] > 1.15 * core["z"]):
+            issues.append(f"core-body Y range ({core['y']:.3f}, p10-p90) is not clearly the tallest axis "
+                           f"vs X={core['x']:.3f} Z={core['z']:.3f} — character may be lying down")
+        # 평면 카드/부조(relief) 복원 실패 검출: 실측(20종)에서 정상 캐릭터의
+        # 최소 수평축/키 비율은 >= 0.125, 카드로 복원된 실패 사례는 0.007이었다
+        # — 0.06이면 2배 마진으로 안전하게 분리된다.
+        depth_ratio = min(core["x"], core["z"]) / core["y"] if core["y"] > 0 else 0.0
     if depth_ratio < 0.06:
-        issues.append(f"core depth ratio {depth_ratio:.3f} (min horizontal axis / height) < 0.06 "
+        issues.append(f"core depth ratio {depth_ratio:.3f} (min secondary axis / main axis) < 0.06 "
                        f"— mesh is a flat card/relief, reconstruction likely failed")
     return {"ok": not issues, "issues": issues, "extents": ext, "core_extents": core,
-            "depth_ratio": depth_ratio, "min_y": min(ys), "max_y": max(ys)}
+            "rig_type": rig_type, "depth_ratio": depth_ratio, "min_y": min(ys), "max_y": max(ys)}
 
 
 def check_hierarchy(gltf):

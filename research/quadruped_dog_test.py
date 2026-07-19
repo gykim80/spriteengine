@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""4족 보행(quadruped) 리깅 실증 테스트 — 절차적 개 메시로 auto_rig() 한계 실측.
+"""4족 보행(quadruped) 리깅 E2E 실증 테스트 — 절차적 개 메시.
 
-목적: 현재 파이프라인(workers/baseline_worker.py auto_rig)이 휴머노이드
-bbox 비율 가정을 4족 동물에 적용하면 무엇이 깨지는지 실측한다.
+목적: 파이프라인(workers/baseline_worker.py auto_rig)이 4족 메시를 자동
+판별해 수평 척추 + 앞다리(Arm 체인)/뒷다리(Leg 체인) 스켈레톤으로 리깅하고,
+휴머노이드 걷기 모션 리타겟 후 validate_character 게이트를 통과하는지 검증한다.
+(초기 실측에서는 휴머노이드 강제 리깅으로 전 게이트 FAIL — 그 회귀 방지용.)
 
 절차:
   1. 절차적 개 메시 GLB 생성 (Y-up, 머리 +Z, 어깨높이 0.62m, 체장 1.4m)
-  2. auto_rig() 실행 → 조인트 월드 배치를 개 해부학과 대조
+  2. auto_rig() 실행 → 체형 판별·조인트 월드 배치를 개 해부학과 대조
   3. 부위별(앞다리/뒷다리/머리/꼬리/몸통) 지배 조인트 분포 실측
   4. 합성 걷기 클립 리타겟(bake_animation) 후 validate_character 게이트 실행
 
-사용법: python3 research/quadruped_dog_test.py [--keep]
+종료 코드: 게이트 PASS면 0, 아니면 1.
+사용법: python3 research/quadruped_dog_test.py
 출력물: /tmp/spriteengine_quadruped/dog.glb, dog-rigged.glb, dog-animated.glb
 """
 import importlib.util
@@ -121,13 +124,18 @@ rg, rbin = worker._read_glb(rigged_glb)
 node_by_name = {n.get("name"): i for i, n in enumerate(rg.get("nodes", []))}
 world = worker._rig_rest_world(rg, node_by_name)
 
-# 스케일 정규화 배율 역산 (개 높이 0.88 < 1.2 → 표준 키로 확대됨)
+skin_name = rg["skins"][0].get("name")
+print(f"    스킨: {skin_name} (조인트 {len(rg['skins'][0]['joints'])}개)")
+
+# 스케일 정규화 배율 역산 — 4족은 체장(Z) 기준이므로 정상 체장이면 1.00배
 rpos = worker._read_vec3(rg, rbin, 0, "POSITION")
 new_h = max(p[1] for p in rpos) - min(p[1] for p in rpos)
+new_l = max(p[2] for p in rpos) - min(p[2] for p in rpos)
 scale = new_h / (maxs[1] - mins[1])
-print(f"    스케일 정규화: {maxs[1]-mins[1]:.2f}m 개 → {new_h:.2f}m ({scale:.2f}배, 휴머노이드 표준 키 강제)")
+print(f"    스케일 정규화: 높이 {maxs[1]-mins[1]:.2f}m→{new_h:.2f}m, "
+      f"체장 {maxs[2]-mins[2]:.2f}m→{new_l:.2f}m ({scale:.2f}배)")
 
-print("\n    휴머노이드 조인트가 개 몸의 어디에 박혔는가 (개 원본 좌표계, m):")
+print("\n    조인트 배치 vs 개 해부학 (개 원본 좌표계, m):")
 ANATOMY = {  # 개 해부학 기준 실제 있어야 할 위치 설명
     "Hips": "골반(엉덩이, y0.48 z-0.30 부근)", "Spine": "등 중앙", "Chest": "가슴(어깨, z+0.30)",
     "Head": "머리(y0.70 z+0.55)", "LeftArm": "왼앞다리 상부", "LeftForeArm": "왼앞발",
@@ -221,4 +229,6 @@ if sk.get("edge_stretch_p99") is not None:
     print(f"      (엣지 신장률 p99={sk['edge_stretch_p99']}, max={sk['edge_stretch_max']}, "
           f"한계 {validator.MAX_EDGE_STRETCH_P99})")
 
-print("\n결론 요약은 stdout 리포트 참고. 산출물:", OUT)
+print("\n산출물:", OUT)
+if not (ok and baked and report["ok"] and skin_name == "AutoQuadrupedRig"):
+    sys.exit(1)

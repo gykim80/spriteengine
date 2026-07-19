@@ -597,21 +597,23 @@ def auto_rig(glb_path, output_path):
     # 지배권을 뺏긴다(A-pose 손끝-허벅지 4~13cm). 1차 지배 배정으로 전완
     # 지배 버텍스의 말단 원심을 구해 전완 본 세그먼트를 실제 손 방향으로
     # 다시 놓는다.
+    # (4족은 전완=앞다리가 수직 하강 세그먼트로 팁이 이미 지면 실측이라 불필요.)
     bones = _bones(tips)
-    dom = [min(bones, key=lambda b: _seg_dist2(p, b[1], b[2]))[0] for p in all_pos]
-    for side in ("Left", "Right"):
-        fj = JNAMES.index(side + "ForeArm")
-        fpos = JWORLD[side + "ForeArm"]
-        mine = [p for p, d in zip(all_pos, dom) if d == fj]
-        if len(mine) < 8:
-            continue
-        far = sorted(mine, key=lambda p: -sum((p[k] - fpos[k]) ** 2 for k in range(3)))
-        far = far[:max(1, len(far) // 10)]
-        c = [sum(p[k] for p in far) / len(far) for k in range(3)]
-        if sum((c[k] - fpos[k]) ** 2 for k in range(3)) > 1e-8:
-            # 원심을 15% 지나치게 연장해 손끝까지 세그먼트가 닿도록 함
-            tips[side + "ForeArm"] = tuple(fpos[k] + 1.15 * (c[k] - fpos[k]) for k in range(3))
-    bones = _bones(tips)
+    if body_type != "quadruped":
+        dom = [min(bones, key=lambda b: _seg_dist2(p, b[1], b[2]))[0] for p in all_pos]
+        for side in ("Left", "Right"):
+            fj = JNAMES.index(side + "ForeArm")
+            fpos = JWORLD[side + "ForeArm"]
+            mine = [p for p, d in zip(all_pos, dom) if d == fj]
+            if len(mine) < 8:
+                continue
+            far = sorted(mine, key=lambda p: -sum((p[k] - fpos[k]) ** 2 for k in range(3)))
+            far = far[:max(1, len(far) // 10)]
+            c = [sum(p[k] for p in far) / len(far) for k in range(3)]
+            if sum((c[k] - fpos[k]) ** 2 for k in range(3)) > 1e-8:
+                # 원심을 15% 지나치게 연장해 손끝까지 세그먼트가 닿도록 함
+                tips[side + "ForeArm"] = tuple(fpos[k] + 1.15 * (c[k] - fpos[k]) for k in range(3))
+        bones = _bones(tips)
 
     # 체인 인접 블렌딩 제한: 2번째 본은 지배 본과 스켈레톤에서 인접(부모/
     # 자식)한 본만 허용한다. 순수 거리 기반이던 이전 방식은 손 버텍스의
@@ -651,7 +653,10 @@ def auto_rig(glb_path, output_path):
                 doms.append(JNAMES[j1])
                 j_bytes += struct.pack("<4H", j1, j2, 0, 0)
                 w_bytes += struct.pack("<4f", w1, w2, 0.0, 0.0)
-            _cut_fused_bridges(gltf, bin_data, prim, doms)
+            if body_type != "quadruped":
+                # 융합 브리지 절단은 인체 A-pose 체인(손↔허벅지 등) 전제 —
+                # 4족은 다리 4개가 몸통에 정상적으로 붙어 있어 오히려 절단 위험.
+                _cut_fused_bridges(gltf, bin_data, prim, doms)
             jv = _append_view(gltf, bin_data, j_bytes)
             wv = _append_view(gltf, bin_data, w_bytes)
             gltf["accessors"].append({

@@ -477,6 +477,155 @@ class ScaleNormalizeTest(unittest.TestCase):
                                worker.STANDARD_CHARACTER_HEIGHT * 0.52, places=3)
 
 
+def make_quadruped_glb(path, scale=1.0):
+    """개 형태의 4족 GLB — 수평 몸통(Z 장축) + 다리 4기둥 + 머리/꼬리.
+
+    반환: (positions, part_of) — part_of[i]는 버텍스 i의 부위 라벨.
+    """
+    pts = []
+    part_of = []
+
+    def add(part, p):
+        part_of.append(part)
+        pts.append((p[0] * scale, p[1] * scale, p[2] * scale))
+
+    for z in (-0.40, -0.20, 0.0, 0.20, 0.40):          # 몸통 (등 y0.62 / 배 y0.38)
+        for sx in (-1, 1):
+            for y in (0.38, 0.62):
+                add("body", (0.14 * sx, y, z))
+    for z in (0.45, 0.58, 0.70):                       # 머리 (전방 위)
+        for sx in (-1, 1):
+            for y in (0.55, 0.85):
+                add("head", (0.10 * sx, y, z))
+    for z in (-0.70, -0.58, -0.45):                    # 꼬리 (후방)
+        for sx in (-1, 1):
+            add("tail", (0.03 * sx, 0.62, z))
+    for part, zc in (("front", 0.30), ("rear", -0.30)):  # 다리 4기둥
+        for sx in (-1, 1):
+            side = "L" if sx > 0 else "R"
+            for y in (0.0, 0.12, 0.25, 0.38):
+                for dz in (-0.05, 0.05):
+                    add(f"leg_{part}_{side}", (0.14 * sx, y, zc + dz))
+
+    faces = []
+    for i in range(len(pts) - 2):
+        faces += [i, i + 1, i + 2]
+    buf = bytearray()
+    for v in pts:
+        buf += struct.pack("<fff", *v)
+    pos_len = len(buf)
+    for i in faces:
+        buf += struct.pack("<H", i)
+    gltf = {
+        "asset": {"version": "2.0"}, "scene": 0,
+        "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+        "buffers": [{"byteLength": len(buf)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": pos_len},
+            {"buffer": 0, "byteOffset": pos_len, "byteLength": len(buf) - pos_len},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": len(pts), "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5123, "count": len(faces), "type": "SCALAR"},
+        ],
+    }
+    worker._write_glb(gltf, buf, path)
+    return pts, part_of
+
+
+class QuadrupedRigTest(unittest.TestCase):
+    """4족 보행 리깅 회귀: 체형 판별 → 수평 척추 + 앞다리=Arm/뒷다리=Leg 체인."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-quadruped-")
+        src = os.path.join(cls.tmp.name, "dog.glb")
+        cls.out = os.path.join(cls.tmp.name, "rigged.glb")
+        cls.pts, cls.part_of = make_quadruped_glb(src)
+        assert worker.auto_rig(src, cls.out)
+        cls.gltf, cls.bin_data = worker._read_glb(cls.out)
+        cls.skin = cls.gltf["skins"][0]
+        cls.jname = [cls.gltf["nodes"][j]["name"] for j in cls.skin["joints"]]
+        cls.node_by_name = {n.get("name"): i for i, n in enumerate(cls.gltf["nodes"])}
+        cls.world = worker._rig_rest_world(cls.gltf, cls.node_by_name)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_classifier(self):
+        self.assertEqual(worker._classify_body_type(self.pts), "quadruped")
+        # 직립 박스(휴머노이드)는 그대로 humanoid여야 한다
+        box = [(x, y, z) for x in (-0.3, 0.3) for y in (0.0, 1.8) for z in (-0.3, 0.3)]
+        self.assertEqual(worker._classify_body_type(box), "humanoid")
+
+    def test_skin_marker_and_tail(self):
+        self.assertEqual(self.skin["name"], "AutoQuadrupedRig")
+        self.assertIn("Tail", self.jname)   # 꼬리 버텍스가 있으므로 Tail 조인트 생성
+        self.assertEqual(len(self.jname), 15)
+
+    def test_horizontal_spine_and_leg_placement(self):
+        w = self.world
+        # 척추는 수평: Hips(후방)→Chest(전방)로 z가 증가, y는 몸통 높이로 동일
+        self.assertLess(w["Hips"][2], w["Spine"][2])
+        self.assertLess(w["Spine"][2], w["Chest"][2])
+        self.assertAlmostEqual(w["Hips"][1], w["Chest"][1], places=5)
+        # 머리는 몸통 앞·위
+        self.assertGreater(w["Head"][2], w["Chest"][2])
+        self.assertGreater(w["Head"][1], w["Chest"][1])
+        # 앞다리(Arm 체인)는 전방 z, 뒷다리(Leg 체인)는 후방 z
+        self.assertGreater(w["LeftArm"][2], 0.0)
+        self.assertLess(w["LeftUpLeg"][2], 0.0)
+        # SMPL 규약: Left*는 +X (리타게팅 미러 방지)
+        for name, pos in w.items():
+            if name.startswith("Left"):
+                self.assertGreater(pos[0], 0.0, f"{name} must be on +X")
+            elif name.startswith("Right"):
+                self.assertLess(pos[0], 0.0, f"{name} must be on -X")
+
+    def _dominant(self, i):
+        attrs = self.gltf["meshes"][0]["primitives"][0]["attributes"]
+        acc = self.gltf["accessors"][attrs["JOINTS_0"]]
+        base = self.gltf["bufferViews"][acc["bufferView"]]["byteOffset"]
+        return self.jname[struct.unpack_from("<H", self.bin_data, base + i * 8)[0]]
+
+    def test_leg_weights_split_front_rear(self):
+        """같은 쪽 앞·뒷다리가 서로 다른 체인에 배정된다 — 휴머노이드 리깅을
+        강제하면 둘 다 한 Leg 체인에 눌려 붙던 버그의 회귀."""
+        for i, part in enumerate(self.part_of):
+            dom = self._dominant(i)
+            if part.startswith("leg_front"):
+                self.assertIn("Arm", dom, f"front leg vertex {i} bound to {dom}")
+            elif part.startswith("leg_rear"):
+                self.assertIn("Leg" if "Leg" in dom else "Foot", dom,
+                              f"rear leg vertex {i} bound to {dom}")
+                self.assertNotIn("Arm", dom)
+            elif part == "tail":
+                self.assertIn(dom, ("Tail", "Hips"), f"tail vertex {i} bound to {dom}")
+            side = "L" if self.pts[i][0] > 0.05 else ("R" if self.pts[i][0] < -0.05 else None)
+            if side and part.startswith("leg_"):
+                self.assertTrue(dom.startswith("Left" if side == "L" else "Right"),
+                                f"{part} vertex {i} crossed sides to {dom}")
+
+    def test_length_scale_normalization(self):
+        """4족은 키(Y)가 아니라 체장(Z) 기준으로 정규화 — 0.88m 개가 휴머노이드
+        표준 키 1.99m로 2.3배 거인화되던 버그의 회귀."""
+        tiny = os.path.join(self.tmp.name, "tiny.glb")
+        tiny_out = os.path.join(self.tmp.name, "tiny-rigged.glb")
+        make_quadruped_glb(tiny, scale=0.2)  # 체장 0.28m < 정상 하한 0.5m
+        self.assertTrue(worker.auto_rig(tiny, tiny_out))
+        gltf, bin_data = worker._read_glb(tiny_out)
+        attrs = gltf["meshes"][0]["primitives"][0]["attributes"]
+        zs = [p[2] for p in worker._read_vec3(gltf, bin_data, attrs["POSITION"], "POSITION")]
+        self.assertAlmostEqual(max(zs) - min(zs), worker.STANDARD_QUADRUPED_LENGTH, places=4)
+        # 정상 체장(1.4m)은 손대지 않는다
+        gltf2, bin2 = worker._read_glb(self.out)
+        attrs2 = gltf2["meshes"][0]["primitives"][0]["attributes"]
+        zs2 = [p[2] for p in worker._read_vec3(gltf2, bin2, attrs2["POSITION"], "POSITION")]
+        self.assertAlmostEqual(max(zs2) - min(zs2), 1.4, places=5)
+
+
 Q_NEG90X = [-0.7071067811865475, 0.0, 0.0, 0.7071067811865476]  # X축 -90°: 로컬 Z-up → Y-up
 
 
