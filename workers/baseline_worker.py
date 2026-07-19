@@ -270,6 +270,65 @@ def _normalize_character_scale(gltf, bin_data):
     return s
 
 
+_FORE_ALLOWED = {
+    "LeftForeArm": frozenset(("LeftForeArm", "LeftArm")),
+    "RightForeArm": frozenset(("RightForeArm", "RightArm")),
+}
+_ARM_CHAIN = frozenset(("LeftArm", "LeftForeArm", "RightArm", "RightForeArm"))
+_LEG_CHAIN = frozenset(("LeftUpLeg", "LeftLeg", "LeftFoot",
+                        "RightUpLeg", "RightLeg", "RightFoot"))
+
+
+def _cut_fused_bridges(gltf, bin_data, prim, doms):
+    """융합 브리지 삼각형 절단.
+
+    복원 메시는 rest에서 손이 허벅지/가슴에 닿아(실측 2.5~5cm, A-pose)
+    표면이 물리적으로 weld되는 경우가 있다. 이런 삼각형은 팔 지배 영역과
+    비인접 체인 영역(허벅지·가슴·반대쪽 팔)을 직접 이어, 팔을 드는 순간
+    고무막처럼 늘어나는 웨빙과 "손이 몸에 붙는" 증상을 만든다 — 웨이트로는
+    해결 불가(어느 쪽에 주든 반대쪽이 찢어짐)라 지오메트리를 잘라야 한다.
+
+    두 규칙으로 삼각형을 인덱스에서 제거한다 (절단 수 반환):
+    (a) 전완 지배 버텍스 + {같은쪽 전완·상완} 외 지배 버텍스 공존
+        — 손↔허벅지·가슴·반대팔 융합 (실측: 손-허벅지 2.5cm weld)
+    (b) 팔체인 지배 + 다리체인 지배 버텍스 공존 — 긴 코트/케이프
+        캐릭터에서 상완 지배 소매가 다리 지오메트리에 weld되는 경우
+        (실측: knight/pirate/robot flykick 웨빙 17~277엣지)
+    """
+    idx_acc = prim.get("indices")
+    if idx_acc is None:
+        return 0
+    acc = gltf["accessors"][idx_acc]
+    view = gltf["bufferViews"][acc["bufferView"]]
+    base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    fmt = {5121: "B", 5123: "H", 5125: "I"}[acc["componentType"]]
+    idx = struct.unpack_from(f"<{acc['count']}{fmt}", bin_data, base)
+    kept = bytearray()
+    kept_count = 0
+    cut = 0
+    for t in range(0, len(idx) - 2, 3):
+        tri = idx[t:t + 3]
+        names = [doms[v] for v in tri]
+        fore_bridge = any(n in _FORE_ALLOWED
+                          and any(m not in _FORE_ALLOWED[n] for m in names)
+                          for n in names)
+        armleg_bridge = (any(n in _ARM_CHAIN for n in names)
+                         and any(n in _LEG_CHAIN for n in names))
+        if fore_bridge or armleg_bridge:
+            cut += 1
+            continue
+        kept += struct.pack(f"<3{fmt}", *tri)
+        kept_count += 3
+    if cut:
+        nv = _append_view(gltf, bin_data, kept)
+        gltf["accessors"].append({
+            "bufferView": nv, "componentType": acc["componentType"],
+            "count": kept_count, "type": "SCALAR",
+        })
+        prim["indices"] = len(gltf["accessors"]) - 1
+    return cut
+
+
 def auto_rig(glb_path, output_path):
     """Static mesh에 바운딩박스 기반 휴머노이드 skeleton을 추가한다.
 
@@ -455,10 +514,13 @@ def auto_rig(glb_path, output_path):
             n_verts = len(positions)
             j_bytes = bytearray()
             w_bytes = bytearray()
+            doms = []
             for pos in positions:
                 j1, j2, w1, w2 = joint_weights(pos)
+                doms.append(JNAMES[j1])
                 j_bytes += struct.pack("<4H", j1, j2, 0, 0)
                 w_bytes += struct.pack("<4f", w1, w2, 0.0, 0.0)
+            _cut_fused_bridges(gltf, bin_data, prim, doms)
             jv = _append_view(gltf, bin_data, j_bytes)
             wv = _append_view(gltf, bin_data, w_bytes)
             gltf["accessors"].append({

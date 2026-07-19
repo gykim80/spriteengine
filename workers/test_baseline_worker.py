@@ -302,6 +302,32 @@ class BentArmRigTest(unittest.TestCase):
                 self.assertEqual(n1, side + "ForeArm",
                                  f"hand vertex {i} dominated by {n1}")
 
+    def test_fused_bridge_triangles_cut(self):
+        """전완 지배 버텍스와 비인접 체인(다리·몸통·반대팔) 지배 버텍스를
+        함께 가진 삼각형(융합 웨빙의 원인)은 인덱스에서 제거돼야 한다."""
+        prim = self.gltf["meshes"][0]["primitives"][0]
+        acc = self.gltf["accessors"][prim["indices"]]
+        view = self.gltf["bufferViews"][acc["bufferView"]]
+        base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        fmt = {5121: "B", 5123: "H", 5125: "I"}[acc["componentType"]]
+        idx = struct.unpack_from(f"<{acc['count']}{fmt}", self.bin_data, base)
+        self.assertGreater(len(idx), 0)
+        allowed = {"LeftForeArm": {"LeftForeArm", "LeftArm"},
+                   "RightForeArm": {"RightForeArm", "RightArm"}}
+        arm = {"LeftArm", "LeftForeArm", "RightArm", "RightForeArm"}
+        leg = {"LeftUpLeg", "LeftLeg", "LeftFoot",
+               "RightUpLeg", "RightLeg", "RightFoot"}
+        doms = [self._vert_joints(i)[0] for i in range(self.n_pts)]
+        for t in range(0, len(idx) - 2, 3):
+            names = [doms[v] for v in idx[t:t + 3]]
+            self.assertFalse(any(n in arm for n in names)
+                             and any(n in leg for n in names),
+                             f"arm-leg bridge triangle survived: {names}")
+            for n in names:
+                if n in allowed:
+                    self.assertTrue(all(m in allowed[n] for m in names),
+                                    f"bridge triangle survived: {names}")
+
     def test_forearm_delta_measured_from_mesh(self):
         """전완 rest-delta는 상완 연속 가정이 아니라 메시 실측 방향이어야
         한다 — 픽스처 전완은 아래+앞+안쪽으로 굽어 있고 좌우 미러다."""
