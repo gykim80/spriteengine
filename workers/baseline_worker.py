@@ -456,7 +456,8 @@ def auto_rig(glb_path, output_path):
     키(Y)보다 긴 메시는 4족 스켈레톤(수평 척추, 앞다리=Arm 체인, 뒷다리=Leg
     체인, 실측 다리 클러스터 배치)을 받는다.
     이미 skins가 있으면 False(패스스루)를 반환한다. 성공 시 output_path에
-    JOINTS_0/WEIGHTS_0가 추가된 skinned GLB를 쓰고 True를 반환한다.
+    JOINTS_0/WEIGHTS_0가 추가된 skinned GLB를 쓰고 판별된 체형 문자열
+    ("humanoid"/"quadruped", truthy)을 반환한다.
     """
     gltf, bin_data = _read_glb(glb_path)
     if gltf.get("skins"):
@@ -677,7 +678,7 @@ def auto_rig(glb_path, output_path):
 
     gltf["buffers"][0]["byteLength"] = len(bin_data)
     _write_glb(gltf, bin_data, output_path)
-    return True
+    return body_type
 
 
 # --- HY-Motion SMPL → auto-rig 리타게팅 · glTF 애니메이션 베이킹 --------------
@@ -1129,13 +1130,15 @@ def run(req):
                 except Exception as exc:
                     emit("progress", jobId=job, progress=.5, message=f"Texture projection skipped: {exc}")
         elif stage == "rig":
-            # skeleton이 없는 static mesh에 바운딩박스 기반 humanoid rig을 추가.
-            emit("progress", jobId=job, progress=.35, message="Fitting humanoid skeleton to mesh bounds")
+            # skeleton이 없는 static mesh에 실측 기반 rig 추가 (체형 자동 판별:
+            # 직립 → humanoid 14조인트, 체장>키 → quadruped 수평 척추 스켈레톤).
+            emit("progress", jobId=job, progress=.35, message="Fitting auto-detected skeleton to mesh")
             try:
-                transformed = auto_rig(source, output)
+                transformed = auto_rig(source, output)  # "humanoid"/"quadruped"/False
                 if transformed:
-                    metrics = {"adapter": "auto-rig-bbox", "validated": True, "skinned": True, "previewOnly": True}
-                    message = "Fitted humanoid skeleton with skin weights"
+                    metrics = {"adapter": "auto-rig-bbox", "validated": True, "skinned": True,
+                               "bodyType": transformed, "previewOnly": True}
+                    message = f"Fitted {transformed} skeleton with skin weights"
             except Exception as exc:
                 emit("progress", jobId=job, progress=.5, message=f"Auto-rig skipped: {exc}")
         elif stage == "motion":

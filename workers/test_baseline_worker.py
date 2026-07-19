@@ -358,7 +358,8 @@ class AutoRigTest(unittest.TestCase):
 
     def test_adds_skin_and_joints(self):
         make_static_glb(self.glb)
-        self.assertTrue(worker.auto_rig(self.glb, self.out))
+        # 반환값은 판별된 체형 문자열(truthy) — rig 스테이지 bodyType 메트릭에 실린다
+        self.assertEqual(worker.auto_rig(self.glb, self.out), "humanoid")
         gltf, _ = worker._read_glb(self.out)
         self.assertEqual(len(gltf.get("skins", [])), 1)
         skin = gltf["skins"][0]
@@ -543,7 +544,7 @@ class QuadrupedRigTest(unittest.TestCase):
         src = os.path.join(cls.tmp.name, "dog.glb")
         cls.out = os.path.join(cls.tmp.name, "rigged.glb")
         cls.pts, cls.part_of = make_quadruped_glb(src)
-        assert worker.auto_rig(src, cls.out)
+        assert worker.auto_rig(src, cls.out) == "quadruped"
         cls.gltf, cls.bin_data = worker._read_glb(cls.out)
         cls.skin = cls.gltf["skins"][0]
         cls.jname = [cls.gltf["nodes"][j]["name"] for j in cls.skin["joints"]]
