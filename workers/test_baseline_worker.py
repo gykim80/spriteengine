@@ -1007,6 +1007,23 @@ class RenderGateTest(unittest.TestCase):
         self.assertTrue(art["metrics"].get("renderValid"),
                         f"valid auto-rig must pass the gate: {art['metrics']}")
 
+    def test_rig_stage_quadruped_orientations_pass_gate(self):
+        """역방향·측방향 복원 개도 프로덕션 rig 스테이지에서 방향 보정을 거쳐
+        검증 게이트를 통과해야 한다 — bodyType 메트릭과 renderValid까지
+        워커 프로토콜 전체 경로로 확인한다."""
+        cases = ({"reverse": True}, {"sideways": True},
+                 {"reverse": True, "sideways": True})
+        for kw in cases:
+            with self.subTest(**kw):
+                dog = os.path.join(self.tmp.name,
+                                   "dog-" + "-".join(sorted(kw)) + ".glb")
+                make_quadruped_glb(dog, **kw)
+                events = self._run("rig", dog)
+                art = next(e for e in events if e["type"] == "artifact")
+                self.assertEqual(art["metrics"].get("bodyType"), "quadruped")
+                self.assertTrue(art["metrics"].get("renderValid"),
+                                f"oriented dog must pass gates: {art['metrics']}")
+
     def test_gate_fails_stage_on_invalid_render(self):
         bad = {"ok": False}
         for sec in ("upright", "hierarchy", "deformation", "arm_pose", "skinning"):
