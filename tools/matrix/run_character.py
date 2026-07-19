@@ -159,6 +159,21 @@ def _recon_candidates(name, pngs, out_dir, quadruped):
     return candidates
 
 
+def _infra_stalled():
+    """엔드포인트 워커가 0이면 True — 크레딧 소진/GPU 재고 고갈 신호.
+
+    실측 2026-07-20: 크레딧 소진으로 recon job이 실행조차 못 됐는데 이를
+    이미지 품질 실패로 오인, 변주 이미지 생성 + 중복 recon job 제출로
+    고아 job(explorer-v2)과 이미지 비용이 낭비됐다. 워커 0이면 이미지
+    문제가 아니므로 적응형 재시도를 중단해야 한다.
+    """
+    try:
+        h = mp.rp("GET", "health")
+        return sum(h.get("workers", {}).values()) == 0, h.get("jobs")
+    except Exception:  # noqa: BLE001 — health 조회 실패는 판단 보류
+        return False, None
+
+
 def reconstruct(name, desc, pngs, quadruped=False):
     ws = mp.WS / name
     out = ws / "reconstruct" / "hunyuan3d21.glb"
@@ -172,6 +187,11 @@ def reconstruct(name, desc, pngs, quadruped=False):
         # 적응형 재시도: 직립 게이트 통과 후보가 없으면 이미지를 새로 만들어
         # 재복원한다 (환각의 변동원은 원본 이미지 — 시드 변주는 무의미).
         while not any(c[1] for c in candidates) and len(pngs) < HUMANOID_MAX_IMAGE_ATTEMPTS:
+            stalled, queue = _infra_stalled()
+            if stalled:
+                sys.exit(f"[recon] {name}: endpoint has ZERO workers — infrastructure "
+                         f"stall (credit balance / GPU capacity), not an image quality "
+                         f"problem; retry when workers recover ({queue})")
             variant = f"{name}-v{len(pngs) + 1}"
             print(f"[recon] {name}: no upright candidate yet — generating variant image {variant}", flush=True)
             gen_characters.generate(variant, desc)
