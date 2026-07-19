@@ -75,8 +75,23 @@ def poll(job_ids, minutes=40):
     pending = dict(job_ids)  # name -> job id
     results = {}
     deadline = time.time() + minutes * 60
+    loops = 0
     while pending and time.time() < deadline:
         time.sleep(6)
+        loops += 1
+        # 실측 2026-07-20: 크레딧 소진으로 워커가 전혀 프로비저닝되지 않는데
+        # 큐 상태만 폴링하다 원인 파악이 1시간 이상 늦었다 → 10회마다 health를
+        # 함께 확인해 "워커 0 + 대기열 존재"를 즉시 경고한다 (크레딧 소진
+        # 또는 DC GPU 재고 고갈 신호).
+        if loops % 10 == 0:
+            try:
+                h = rp("GET", "health")
+                if sum(h.get("workers", {}).values()) == 0:
+                    print(f"[poll] WARNING: endpoint has ZERO workers while "
+                          f"{len(pending)} job(s) wait — check RunPod credit "
+                          f"balance / GPU capacity ({h.get('jobs')})", flush=True)
+            except Exception:  # noqa: BLE001
+                pass
         for name, jid in list(pending.items()):
             st = rp("GET", "status/" + jid)
             s = st.get("status")
