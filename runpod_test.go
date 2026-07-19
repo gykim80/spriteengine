@@ -168,14 +168,23 @@ func TestRunNextStageMotionRoutesToHYMotion(t *testing.T) {
 			t.Errorf("unexpected RunPod payload: task=%q err=%v", req.Input.Task, err)
 		}
 		gotPrompts = req.Input.Prompts
-		frame := make([][]float64, len(joints))
-		for i := range frame {
-			frame[i] = []float64{0, 0, 0, 1}
-		}
-		quats := [][][]float64{frame, frame, frame}
-		trans := [][]float64{{0, 0.9, 0}, {0, 0.95, 0}, {0, 0.9, 0}}
+		// 워커의 렌더링 정상성 게이트는 항등/중복 클립과 제자리 걷기(run/walk의
+		// 수평 이동 0m)를 실패시키므로, 클립마다 상이한 소각도 L_Shoulder 회전과
+		// 전진 이동을 담은 최소한의 유효 모션을 응답한다.
+		trans := [][]float64{{0, 0.9, 0}, {0, 0.95, 0.35}, {0, 0.9, 0.7}}
 		motions := make([]map[string]any, 0, len(req.Input.Prompts))
-		for _, p := range req.Input.Prompts {
+		for pi, p := range req.Input.Prompts {
+			base := 0.05 + 0.01*float64(pi)
+			quats := make([][][]float64, 3)
+			for f := 0; f < 3; f++ {
+				frame := make([][]float64, len(joints))
+				for j := range frame {
+					frame[j] = []float64{0, 0, 0, 1}
+				}
+				half := base * float64(f) / 2
+				frame[16] = []float64{math.Sin(half), 0, 0, math.Cos(half)} // L_Shoulder
+				quats[f] = frame
+			}
 			motions = append(motions, map[string]any{
 				"id": p.ID, "text": p.Text, "fps": 30,
 				"joints": joints, "quats": quats, "trans": trans,

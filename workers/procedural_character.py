@@ -33,16 +33,17 @@ pa=pack(pos,'f',5126,'VEC3',len(pos),[-.42,0,-.2],[.42,1.75,.2],34962);na=pack(n
 # skeleton hips->spine->chest->head, arms and legs
 # 다리는 Hips의 자식이어야 hip 이동/회전이 전파된다 (단일 루트 = Hips).
 # RightForeArm(14)은 좌우 대칭을 위해 존재해야 하며, 기존 인덱스 보존을 위해 끝에 둔다.
+# 좌우 배치는 SMPL 규약(+X = Left)을 따라야 HY-Motion 리타겟이 미러되지 않는다.
 nodes=[
  {'name':'Character','children':[1],'mesh':0,'skin':0},
  {'name':'Hips','translation':[0,.65,0],'children':[2,8,11]},
  {'name':'Spine','translation':[0,.45,0],'children':[3]},
  {'name':'Chest','translation':[0,.45,0],'children':[4,5,6]},
  {'name':'Head','translation':[0,.5,0]},
- {'name':'LeftArm','translation':[-.35,.25,0],'children':[7]}, {'name':'RightArm','translation':[.35,.25,0],'children':[14]}, {'name':'LeftForeArm','translation':[-.45,0,0]},
- {'name':'LeftUpLeg','translation':[-.2,0,0],'children':[9]}, {'name':'LeftLeg','translation':[0,-.65,0],'children':[10]}, {'name':'LeftFoot','translation':[0,-.55,.12]},
- {'name':'RightUpLeg','translation':[.2,0,0],'children':[12]}, {'name':'RightLeg','translation':[0,-.65,0],'children':[13]}, {'name':'RightFoot','translation':[0,-.55,.12]},
- {'name':'RightForeArm','translation':[.45,0,0]}]
+ {'name':'LeftArm','translation':[.35,.25,0],'children':[7]}, {'name':'RightArm','translation':[-.35,.25,0],'children':[14]}, {'name':'LeftForeArm','translation':[.45,0,0]},
+ {'name':'LeftUpLeg','translation':[.2,0,0],'children':[9]}, {'name':'LeftLeg','translation':[0,-.65,0],'children':[10]}, {'name':'LeftFoot','translation':[0,-.55,.12]},
+ {'name':'RightUpLeg','translation':[-.2,0,0],'children':[12]}, {'name':'RightLeg','translation':[0,-.65,0],'children':[13]}, {'name':'RightFoot','translation':[0,-.55,.12]},
+ {'name':'RightForeArm','translation':[-.45,0,0]}]
 # inverse binds simplified identity; structurally valid and renderer recomputes world transforms
 mats=[]
 for _ in range(14):mats.append((1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1))
