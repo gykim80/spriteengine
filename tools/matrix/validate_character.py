@@ -343,26 +343,16 @@ LEG_SEP_SCAN_TOP = 0.5   # 지면에서 50% 높이까지만 스캔
 LEG_WEB_PENALTY = 2.0    # 다리 사이 웹(막) 밀도 페널티 가중치
 
 
-def leg_quality(glb_path):
-    """4족 복원 후보의 다리 품질 점수 (상대 비교용, 높을수록 좋음).
+def _world_positions(gltf, bin_data):
+    """메시 버텍스를 노드 TRS 적용 월드 좌표로 수집한다 (리깅 전 원시 메시용).
 
-    리깅 전 원시 메시에도 동작한다(방향 정규화 전이므로 몸 길이 축을
-    수평 범위가 더 긴 축으로 자동 판정).
-      - 접지 다리 기둥 4개 미만 또는 4사분면 미커버 → score=-1.0 (실격)
-      - score = front_sep + rear_sep + 0.5 * balance - 2.0 * (web_f + web_r)
-        · pair separation: 전/후 다리쌍의 좌/우가 별도 기둥으로 유지되는
-          최대 높이 비율 — 웹/융합으로 뭉개진 복원은 낮은 높이에서 붙는다
-        · balance: 접지 기둥 질량 min/median — 퇴화 다리가 있으면 낮다
-        · web: 다리쌍 사이 가운데 1/3 회랑의 점 밀도(웹 점/다리 점) —
-          실측: 웹 결함 개는 front 0.054/rear 0.048, 정상은 ~0.04/0.01
+    원시 Hunyuan 복원은 Z-up 정점 + 노드 회전(+90° X)으로 Y-up을 만든다.
+    스킨 메시는 glTF 스펙상 노드 TRS가 무시되므로 비스킨 노드에만 적용.
     """
-    gltf, bin_data = worker._read_glb(glb_path)
     all_pos = []
     for node in gltf.get("nodes", []):
         if "mesh" not in node:
             continue
-        # 원시 Hunyuan 복원은 Z-up 정점 + 노드 회전(+90° X)으로 Y-up을 만든다.
-        # 스킨 메시는 glTF 스펙상 노드 TRS가 무시되므로 비스킨 노드에만 적용.
         rot = node.get("rotation") if "skin" not in node else None
         scale = node.get("scale") if "skin" not in node else None
         trans = node.get("translation") if "skin" not in node else None
@@ -378,6 +368,74 @@ def leg_quality(glb_path):
                 if trans:
                     p = (p[0] + trans[0], p[1] + trans[1], p[2] + trans[2])
                 all_pos.append(p)
+    return all_pos
+
+
+# 휴머노이드 복원 직립 게이트 임계값 — check_upright와 동일 기준을 리깅 전
+# 원시 메시에 적용한다. 실측: 정상 복원 24종은 core Y가 X/Z의 1.15배를 크게
+# 상회, 누운 복원(vampire — raw XY 평면 대각 32°)은 Y가 최단축이었다.
+UPRIGHT_MIN_RATIO = 1.15
+UPRIGHT_MIN_DEPTH_RATIO = 0.06
+# 파편(degenerate fragment) 검출 — 정상 Hunyuan 출력은 원점 중심
+# (off/size 0.002~0.004)·최장축 ~1.99 정규화 볼륨을 채운다. 실측 실패
+# (nurse): 4,979 verts 조각이 z≈0.94에 치우쳐 최장축 0.377 — 비율만 사람
+# 같아 직립 검사를 통과했었다. 두 기준 모두 정상/실패 사이 갭이 수백 배라
+# 안전하게 분리된다.
+FRAGMENT_MAX_CENTER_OFFSET = 0.5   # bbox 중심 |offset| / 최장축
+FRAGMENT_MIN_EXTENT = 1.0          # 최장축 절대 하한 (정상 ~1.99)
+
+
+def humanoid_upright_quality(glb_path):
+    """휴머노이드 복원 후보의 직립 품질 (상대 비교용 score, ok=합격 게이트).
+
+    score = core Y / max(core X, core Z) — 누워서(또는 대각선으로) 복원된
+    메시는 리깅 단계의 노드 회전 베이크로는 살릴 수 없으므로(회전은 Z-up
+    보정용이지 누움 교정이 아님) 복원 직후 차단하고 원본 이미지를 다시
+    만드는 것이 유일한 해법이다 (실측: barbarian/cowboy/vampire).
+    파편 복원(원점에서 멀리 떨어진 작은 조각)도 여기서 함께 차단한다.
+    """
+    gltf, bin_data = worker._read_glb(glb_path)
+    all_pos = _world_positions(gltf, bin_data)
+    if not all_pos:
+        return {"score": -1.0, "ok": False, "reason": "no mesh POSITION data"}
+    core, ext, ctr = {}, {}, {}
+    for axis, vals in (("x", [p[0] for p in all_pos]),
+                       ("y", [p[1] for p in all_pos]),
+                       ("z", [p[2] for p in all_pos])):
+        core[axis] = _percentile(vals, 90) - _percentile(vals, 10)
+        ext[axis] = max(vals) - min(vals)
+        ctr[axis] = (max(vals) + min(vals)) / 2.0
+    widest = max(core["x"], core["z"]) or 1e-9
+    score = core["y"] / widest
+    depth_ratio = min(core["x"], core["z"]) / core["y"] if core["y"] > 0 else 0.0
+    size = max(ext.values()) or 1e-9
+    center_offset = max(abs(c) for c in ctr.values()) / size
+    fragment = size < FRAGMENT_MIN_EXTENT or center_offset > FRAGMENT_MAX_CENTER_OFFSET
+    ok = (score > UPRIGHT_MIN_RATIO and depth_ratio >= UPRIGHT_MIN_DEPTH_RATIO
+          and not fragment)
+    if fragment:
+        score = -1.0  # 파편은 상대 비교에서도 항상 최하위
+    return {"score": round(score, 3), "ok": ok, "depth_ratio": round(depth_ratio, 3),
+            "fragment": fragment, "max_extent": round(size, 3),
+            "center_offset": round(center_offset, 3),
+            "core": {k: round(v, 3) for k, v in core.items()}}
+
+
+def leg_quality(glb_path):
+    """4족 복원 후보의 다리 품질 점수 (상대 비교용, 높을수록 좋음).
+
+    리깅 전 원시 메시에도 동작한다(방향 정규화 전이므로 몸 길이 축을
+    수평 범위가 더 긴 축으로 자동 판정).
+      - 접지 다리 기둥 4개 미만 또는 4사분면 미커버 → score=-1.0 (실격)
+      - score = front_sep + rear_sep + 0.5 * balance - 2.0 * (web_f + web_r)
+        · pair separation: 전/후 다리쌍의 좌/우가 별도 기둥으로 유지되는
+          최대 높이 비율 — 웹/융합으로 뭉개진 복원은 낮은 높이에서 붙는다
+        · balance: 접지 기둥 질량 min/median — 퇴화 다리가 있으면 낮다
+        · web: 다리쌍 사이 가운데 1/3 회랑의 점 밀도(웹 점/다리 점) —
+          실측: 웹 결함 개는 front 0.054/rear 0.048, 정상은 ~0.04/0.01
+    """
+    gltf, bin_data = worker._read_glb(glb_path)
+    all_pos = _world_positions(gltf, bin_data)
     if not all_pos:
         return {"score": -1.0, "reason": "no mesh POSITION data"}
     xs = [p[0] for p in all_pos]; ys = [p[1] for p in all_pos]; zs = [p[2] for p in all_pos]

@@ -55,6 +55,18 @@ CHARACTERS_SET2 = {
     "wrestler":   "a professional wrestler in a spandex singlet with a championship belt around the waist",
     "monk":       "a shaolin monk in an orange and yellow robe with prayer beads around the wrist",
     "mechanic":   "a mechanic in navy blue coveralls with a tool belt and a grease-stained cap",
+    # 신규 5종 (2026-07-20): 실측 학습된 제약 반영 — 몸에서 멀리 뻗는 소품 금지
+    # (barbarian/cowboy 복원 실패), 케이프 금지(superhero), 챙은 snug/narrow만.
+    "vampire":    "an elegant vampire in a fitted black victorian suit with a dark red vest and slicked-back hair, no cape",
+    # 주의: "teal scrubs + stethoscope" 계열은 서로 다른 이미지 3장 모두
+    # Hunyuan3D가 상단부 파편(최장축 0.3~0.6, 중심 오프셋 1.5~3.1)만 복원하는
+    # 체계적 실패 → 청진기를 빼고 단순한 전신 유니폼 묘사로 조정 (실측 2026-07-20).
+    "nurse":      "a friendly nurse in a teal short-sleeve scrub top and matching scrub pants with white sneakers",
+    # 주의: 맨살 위주 gladiator 묘사는 gpt-image-2 safety(output 단계)에 차단됨
+    # (실측 400 moderation_blocked) → 붉은 튜닉을 입은 로마 병사풍으로 조정.
+    "gladiator":  "a roman gladiator warrior wearing a red tunic under a bronze chest plate, leather arm guards and sandals, no weapons, no helmet",
+    "skater":     "a skateboarder in a fitted hoodie, beanie and knee pads, no skateboard",
+    "explorer":   "a jungle explorer in a khaki shirt, cargo pants and a snug narrow-brim boonie hat",
 }
 
 CHARACTERS = {

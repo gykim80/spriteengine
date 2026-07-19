@@ -78,6 +78,13 @@ def chunk(prompts, max_size=20):
 # 이미지를 여러 장 생성해 각각 복원한 뒤 leg_quality 최고 후보를 선택한다.
 QUAD_IMAGE_CANDIDATES = 3
 
+# 휴머노이드도 간혹 누운/대각선 자세로 복원된다 (실측: vampire — raw XY 평면
+# 대각 32° 누움, 리깅의 노드 회전 베이크로는 교정 불가). 4족과 달리 발생
+# 빈도가 낮으므로 이미지를 선제 3장 만들지 않고, 복원 직후 직립 품질 게이트
+# (humanoid_upright_quality)에 실패한 경우에만 이미지를 추가 생성해 재복원하는
+# 적응형 재시도를 쓴다 (최대 3장).
+HUMANOID_MAX_IMAGE_ATTEMPTS = 3
+
 
 def image_variants(name, count=QUAD_IMAGE_CANDIDATES):
     return [name] + [f"{name}-v{i}" for i in range(2, count + 1)]
@@ -97,14 +104,17 @@ def ensure_images(name, desc, char_set):
     return pngs
 
 
-def reconstruct(name, pngs, quadruped=False):
-    ws = mp.WS / name
-    out = ws / "reconstruct" / "hunyuan3d21.glb"
-    if out.exists():
-        print(f"[recon] {name}: exists, skip", flush=True)
-        return out
+def _recon_candidates(name, pngs, out_dir, quadruped):
+    """이미지들을 복원해 (score, ok, stem, glb경로, png경로) 후보 리스트 반환.
+
+    이미 복원된 candidate-*.glb가 있으면 재제출 없이 재평가만 한다
+    (재시도 시 GPU 시간 절약).
+    """
     jobs = {}
     for png in pngs:
+        if (out_dir / f"candidate-{png.stem}.glb").exists():
+            print(f"[recon] {name}: image={png.stem} candidate exists, re-scoring", flush=True)
+            continue
         payload = {"input": {
             "image": base64.b64encode(png.read_bytes()).decode(), "seed": 1234,
             "steps": 30, "guidance_scale": 5.0, "octree_resolution": 256,
@@ -114,37 +124,65 @@ def reconstruct(name, pngs, quadruped=False):
         job = mp.rp("POST", "run", payload, timeout=120)
         jobs[png.stem] = job["id"]
         print(f"[recon] {name}: submitted image={png.stem} {job['id']}", flush=True)
-    results = mp.poll(jobs)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    results = mp.poll(jobs) if jobs else {}
     candidates = []
     for png in pngs:
-        result = results.get(png.stem)
-        if not result or not result.get("glb_base64"):
-            print(f"[recon] {name}: image={png.stem} FAILED {str((result or {}).get('error'))[:200]}", flush=True)
-            continue
-        glb = base64.b64decode(result["glb_base64"])
-        assert glb[:4] == b"glTF"
-        cand = out.parent / f"candidate-{png.stem}.glb"
-        cand.write_bytes(glb)
-        score = 0.0
+        cand = out_dir / f"candidate-{png.stem}.glb"
+        if not cand.exists():
+            result = results.get(png.stem)
+            if not result or not result.get("glb_base64"):
+                print(f"[recon] {name}: image={png.stem} FAILED {str((result or {}).get('error'))[:200]}", flush=True)
+                continue
+            glb = base64.b64decode(result["glb_base64"])
+            assert glb[:4] == b"glTF"
+            cand.write_bytes(glb)
+        # 바닥 판(base slab) 위에 서 있는 복원(실측: gladiator 3장, vampire-v1)은
+        # 슬래브만 제거하면 정상 후보다 — 스코어링 전에 잘라낸다 (없으면 no-op).
+        stripped = validate_character.worker.strip_base_plane(str(cand), str(cand))
+        if stripped:
+            print(f"[recon] {name}: image={png.stem} stripped base plane ({stripped} verts)", flush=True)
         if quadruped:
             q = validate_character.leg_quality(str(cand))
-            score = q["score"]
-            print(f"[recon] {name}: image={png.stem} {len(glb)} bytes leg_quality={q}", flush=True)
+            score, ok = q["score"], q["score"] >= 0
+            print(f"[recon] {name}: image={png.stem} {cand.stat().st_size} bytes leg_quality={q}", flush=True)
         else:
-            print(f"[recon] {name}: image={png.stem} {len(glb)} bytes textured={result.get('textured')}", flush=True)
-        candidates.append((score, png.stem, cand, png))
+            q = validate_character.humanoid_upright_quality(str(cand))
+            score, ok = q["score"], q["ok"]
+            print(f"[recon] {name}: image={png.stem} {cand.stat().st_size} bytes upright_quality={q}", flush=True)
+        candidates.append((score, ok, png.stem, cand, png))
+    return candidates
+
+
+def reconstruct(name, desc, pngs, quadruped=False):
+    ws = mp.WS / name
+    out = ws / "reconstruct" / "hunyuan3d21.glb"
+    if out.exists():
+        print(f"[recon] {name}: exists, skip", flush=True)
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pngs = list(pngs)
+    candidates = _recon_candidates(name, pngs, out.parent, quadruped)
+    if not quadruped:
+        # 적응형 재시도: 직립 게이트 통과 후보가 없으면 이미지를 새로 만들어
+        # 재복원한다 (환각의 변동원은 원본 이미지 — 시드 변주는 무의미).
+        while not any(c[1] for c in candidates) and len(pngs) < HUMANOID_MAX_IMAGE_ATTEMPTS:
+            variant = f"{name}-v{len(pngs) + 1}"
+            print(f"[recon] {name}: no upright candidate yet — generating variant image {variant}", flush=True)
+            gen_characters.generate(variant, desc)
+            png = mp.CHARS / f"{variant}.png"
+            pngs.append(png)
+            candidates += _recon_candidates(name, [png], out.parent, quadruped)
     if not candidates:
         sys.exit(f"[recon] {name}: all reconstructions FAILED")
-    best_score, best_stem, best, best_png = max(candidates)
-    if quadruped and best_score < 0:
-        sys.exit(f"[recon] {name}: no candidate reconstructed 4 sound leg columns "
-                 f"— regenerate the source images and retry")
+    best_score, best_ok, best_stem, best, best_png = max(candidates)
+    if not best_ok:
+        kind = "4 sound leg columns" if quadruped else "an upright body"
+        sys.exit(f"[recon] {name}: no candidate reconstructed {kind} "
+                 f"— adjust the character prompt and retry")
     out.write_bytes(best.read_bytes())
     # 앱 등록 시 실제 채택된 원본 이미지를 쓰도록 함께 보존한다.
     (out.parent / "source.png").write_bytes(best_png.read_bytes())
-    if quadruped:
-        print(f"[recon] {name}: selected image={best_stem} (leg_quality score={best_score})", flush=True)
+    print(f"[recon] {name}: selected image={best_stem} (score={best_score})", flush=True)
     return out
 
 
@@ -276,7 +314,7 @@ def main():
 
     mp.WS.mkdir(parents=True, exist_ok=True)
     pngs = ensure_images(args.name, desc, args.set)
-    recon_glb = reconstruct(args.name, pngs, quadruped=(args.set == "q"))
+    recon_glb = reconstruct(args.name, desc, pngs, quadruped=(args.set == "q"))
     retopo_path, rig_path, body_type = retopo_and_rig(args.name, recon_glb)
     generate_motion(args.name)
     motion_path, animations, model = bake_and_validate(args.name, rig_path)

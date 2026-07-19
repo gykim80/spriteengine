@@ -222,6 +222,171 @@ def _bake_mesh_node_transform(gltf, bin_data):
         node["scale"] = [1.0, 1.0, 1.0]
 
 
+# 복원 실패 유형: 캐릭터가 얇은 바닥 판(base slab) 위에 서 있는 메시
+# (실측 2026-07-20: gladiator 3장 전부, vampire v1). 하단 밴드가 XZ 전폭
+# (스팬 비율 1.00)·16×16 그리드 점유율 0.88~1.00으로 꽉 찬 슬래브가 깔리고,
+# 그 위 캐릭터 자체는 정상이다. 정상 humanoid 하단 밴드는 발 수준(스팬
+# ≤0.89, 점유율 ≤0.37), 4족은 네 발(점유율 ~0.02)이라 갭이 커서 안전하게
+# 분리된다. 캐릭터는 구제 가능하므로 후보 기각 대신 슬래브만 잘라낸다.
+BASE_SLAB_BAND = 0.015      # 검출 밴드 높이 (전체 높이 비율)
+BASE_SLAB_SCAN_BANDS = 8    # 하단 12%까지 스캔 (vampire v1은 밴드 2~3이 슬래브)
+BASE_SLAB_MIN_SPAN = 0.8    # 슬래브 판정: 밴드 XZ 스팬 / 전체 스팬
+BASE_SLAB_MIN_FILL = 0.5    # 슬래브 판정: 그리드 점유 셀 비율
+BASE_SLAB_GRID = 16
+# 슬래브 제거 후 재정규화 배율 상한. 슬래브가 정규화 볼륨을 차지해 캐릭터가
+# 미니어처로 축소된 복원(실측 gladiator: 키 0.67 → x2.96 업스케일 필요)은
+# 버텍스 11,483(정상 대비 43%)·텍셀 밀도 저하로 진흙 인형 같은 저품질이 된다.
+# 임계 초과 구제는 기각하고 원본 이미지 재생성을 유도한다 (얇은 받침대처럼
+# 소폭 보정으로 끝나는 경우만 구제 허용).
+BASE_SLAB_MAX_RESCUE_SCALE = 1.25
+
+
+class BasePlaneRescueError(ValueError):
+    """슬래브 제거 후 남은 캐릭터가 저해상도 미니어처라 구제를 기각함."""
+
+
+def _component_size(component_type):
+    return {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}[component_type]
+
+
+def _type_width(type_name):
+    return {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}[type_name]
+
+
+def strip_base_plane(glb_path, output_path):
+    """복원 메시 하단의 바닥 판(base slab)을 검출해 잘라낸다.
+
+    검출은 노드 TRS 적용 월드 좌표에서, 제거는 로컬 버텍스 데이터에서 수행
+    (노드 트랜스폼은 유지하되, 제거 후 남은 캐릭터를 Hunyuan 정규화 규약
+    (최장축 ~1.99·원점 중심)으로 되돌리도록 노드 scale/translation을 보정 —
+    슬래브가 정규화 기준을 차지해 캐릭터가 미니어처로 축소된 것을 복구).
+    슬래브가 없으면 0을 반환하고 파일을 쓰지 않는다 (no-op, 멱등).
+    반환값: 제거된 버텍스 수.
+    """
+    gltf, bin_data = _read_glb(glb_path)
+    prims = []  # (node, prim, local_positions, world_positions)
+    for node in gltf.get("nodes", []):
+        if "mesh" not in node or "skin" in node:
+            continue
+        rot = node.get("rotation") or [0.0, 0.0, 0.0, 1.0]
+        trans = node.get("translation") or [0.0, 0.0, 0.0]
+        scale = node.get("scale") or [1.0, 1.0, 1.0]
+        identity = _quat_is_identity(rot) and trans == [0.0, 0.0, 0.0] and scale == [1.0, 1.0, 1.0]
+        for prim in gltf["meshes"][node["mesh"]].get("primitives", []):
+            pid = prim.get("attributes", {}).get("POSITION")
+            if pid is None:
+                continue
+            local = _read_vec3(gltf, bin_data, pid, "POSITION")
+            if identity:
+                world = local
+            else:
+                world = []
+                for p in local:
+                    p = (p[0] * scale[0], p[1] * scale[1], p[2] * scale[2])
+                    p = _quat_rotate_vec3(rot, p)
+                    world.append((p[0] + trans[0], p[1] + trans[1], p[2] + trans[2]))
+            prims.append((node, prim, local, world))
+    all_world = [p for _, _, _, world in prims for p in world]
+    if len(all_world) < 100:
+        return 0
+    xs = [p[0] for p in all_world]; ys = [p[1] for p in all_world]; zs = [p[2] for p in all_world]
+    min_x, span_x = min(xs), (max(xs) - min(xs)) or 1e-9
+    min_z, span_z = min(zs), (max(zs) - min(zs)) or 1e-9
+    min_y, h = min(ys), (max(ys) - min(ys)) or 1e-9
+    band_h = BASE_SLAB_BAND * h
+    slab_top_band = -1
+    for b in range(BASE_SLAB_SCAN_BANDS):
+        lo, hi = min_y + b * band_h, min_y + (b + 1) * band_h
+        pts = [(p[0], p[2]) for p in all_world if lo <= p[1] < hi]
+        if len(pts) < 32:
+            continue
+        bxs = [p[0] for p in pts]; bzs = [p[1] for p in pts]
+        ratio_x = (max(bxs) - min(bxs)) / span_x
+        ratio_z = (max(bzs) - min(bzs)) / span_z
+        cells = {(min(BASE_SLAB_GRID - 1, int((x - min_x) / span_x * BASE_SLAB_GRID)),
+                  min(BASE_SLAB_GRID - 1, int((z - min_z) / span_z * BASE_SLAB_GRID)))
+                 for x, z in pts}
+        fill = len(cells) / float(BASE_SLAB_GRID ** 2)
+        if ratio_x >= BASE_SLAB_MIN_SPAN and ratio_z >= BASE_SLAB_MIN_SPAN and fill >= BASE_SLAB_MIN_FILL:
+            slab_top_band = b
+    if slab_top_band < 0:
+        return 0
+    cut_y = min_y + (slab_top_band + 1) * band_h
+
+    removed = 0
+    kept_world = []
+    for node, prim, local, world in prims:
+        keep = [i for i, p in enumerate(world) if p[1] >= cut_y]
+        kept_world.extend(world[i] for i in keep)
+        if len(keep) == len(world):
+            continue
+        removed += len(world) - len(keep)
+        keep_set = set(keep)
+        remap = {old: new for new, old in enumerate(keep)}
+        # 모든 버텍스 속성(POSITION/NORMAL/TEXCOORD…)을 동일 필터로 재작성.
+        for key, aid in list(prim.get("attributes", {}).items()):
+            acc = gltf["accessors"][aid]
+            elem = _component_size(acc["componentType"]) * _type_width(acc["type"])
+            view = gltf["bufferViews"][acc["bufferView"]]
+            stride = view.get("byteStride", elem)
+            base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+            blob = bytearray()
+            for i in keep:
+                off = base + i * stride
+                blob += bin_data[off:off + elem]
+            new_acc = {"bufferView": _append_view(gltf, bin_data, bytes(blob)),
+                       "byteOffset": 0, "componentType": acc["componentType"],
+                       "count": len(keep), "type": acc["type"]}
+            if key == "POSITION":
+                kept = [local[i] for i in keep]
+                new_acc["min"] = [min(p[k] for p in kept) for k in range(3)]
+                new_acc["max"] = [max(p[k] for p in kept) for k in range(3)]
+            gltf["accessors"].append(new_acc)
+            prim["attributes"][key] = len(gltf["accessors"]) - 1
+        # 세 정점이 모두 남은 삼각형만 보존, 인덱스는 uint32로 통일.
+        idx = _read_indices(gltf, bin_data, prim)
+        if idx is None:
+            idx = list(range(len(world)))
+        new_idx = []
+        for t in range(0, len(idx) - 2, 3):
+            tri = (idx[t], idx[t + 1], idx[t + 2])
+            if tri[0] in keep_set and tri[1] in keep_set and tri[2] in keep_set:
+                new_idx.extend((remap[tri[0]], remap[tri[1]], remap[tri[2]]))
+        blob = struct.pack(f"<{len(new_idx)}I", *new_idx)
+        gltf["accessors"].append({"bufferView": _append_view(gltf, bin_data, blob),
+                                  "byteOffset": 0, "componentType": 5125,
+                                  "count": len(new_idx), "type": "SCALAR"})
+        prim["indices"] = len(gltf["accessors"]) - 1
+    if not removed:
+        return 0
+    # 재정규화: 슬래브(예: 2×2 판)가 정규화 볼륨을 차지해 그 위 캐릭터가
+    # 미니어처로 축소된 경우(실측 gladiator: 슬래브 제거 후 키 0.67), 남은
+    # 메시를 Hunyuan 규약(최장축 STANDARD_CHARACTER_HEIGHT, 원점 중심)으로
+    # 되돌린다. 균일 스케일은 노드 회전과 가환이므로 노드 TRS로만 보정한다:
+    # world'(v) = T' + s·R·(S∘v),  T' = s·(T − bbox중심) → 중심이 원점으로.
+    bounds = [(min(p[k] for p in kept_world), max(p[k] for p in kept_world)) for k in range(3)]
+    size = max(hi - lo for lo, hi in bounds) or 1e-9
+    s = STANDARD_CHARACTER_HEIGHT / size
+    if s > BASE_SLAB_MAX_RESCUE_SCALE:
+        # 파일은 쓰지 않고 기각한다 (원본 무변경) — 호출자가 후보 제외/작업
+        # 실패로 처리해 이미지 재생성을 유도한다.
+        raise BasePlaneRescueError(
+            f"base slab rescue needs x{s:.2f} upscale (limit x{BASE_SLAB_MAX_RESCUE_SCALE}) — "
+            "remaining character is a low-resolution miniature; regenerate the source image")
+    center = [(lo + hi) / 2.0 for lo, hi in bounds]
+    seen = set()
+    for node, _, _, _ in prims:
+        if id(node) in seen:  # 노드 하나에 primitive 여러 개여도 TRS 보정은 1회만
+            continue
+        seen.add(id(node))
+        trans = node.get("translation") or [0.0, 0.0, 0.0]
+        scale = node.get("scale") or [1.0, 1.0, 1.0]
+        node["translation"] = [s * (t - c) for t, c in zip(trans, center)]
+        node["scale"] = [s * sc for sc in scale]
+    _write_glb(gltf, bin_data, output_path)
+    return removed
+
+
 # Hunyuan3D-2.1 정상 출력의 캐릭터 키 (실측 24종 전부 ~1.987). 복원이 간혹
 # 표준에서 크게 벗어난 스케일로 나오면(실측: cowboy 0.494 — 1/4 크기),
 # HY-Motion 루트 이동 리타게팅 스케일도 캐릭터 키에 비례해 함께 줄어들어
@@ -1177,6 +1342,54 @@ def bake_texture(glb_path, image_path, output_path):
     return True
 
 
+def neutralize_material(glb_path, output_path):
+    """Hunyuan3D 텍스처 출력의 광택 과다 재질을 중화한 GLB를 쓴다.
+
+    실측(2026-07-20, 구/신 캐릭터 공통): Hunyuan3D-2.1 텍스처 파이프라인은
+    KHR_materials_specular specularColorFactor=[2,2,2](스펙큘러 2배)에
+    metallicFactor 미지정(glTF 기본값 1.0 = 완전 금속) + metallicRoughness
+    텍스처(roughness 평균 ~0.43-0.62)를 함께 내보내, 표준 3광 뷰어 조명에서
+    전신이 광택 플라스틱 인형처럼 보이고 밝은 하이라이트 블롭(부유 파편처럼
+    보임)까지 만든다. baseColor 텍스처만 남기고 specular 확장 제거,
+    metallic 0, roughness 1.0으로 중화한다 (bake_texture의 오프라인
+    투영 머티리얼과 동일 기준). 변경이 있으면 True, no-op이면 False(멱등).
+    """
+    gltf, bin_data = _read_glb(glb_path)
+    materials = gltf.get("materials") or []
+    changed = False
+    for mat in materials:
+        ext = mat.get("extensions") or {}
+        if "KHR_materials_specular" in ext:
+            del ext["KHR_materials_specular"]
+            if not ext:
+                mat.pop("extensions", None)
+            changed = True
+        pbr = mat.setdefault("pbrMetallicRoughness", {})
+        if pbr.get("metallicFactor") != 0.0:
+            pbr["metallicFactor"] = 0.0
+            changed = True
+        if pbr.get("roughnessFactor") != 1.0:
+            pbr["roughnessFactor"] = 1.0
+            changed = True
+        if "metallicRoughnessTexture" in pbr:
+            # 텍스처 참조만 제거한다 (이미지 바이트는 남지만 파괴적 재작성보다
+            # 안전 — 기등록 GLB 인플레이스 교정에도 같은 경로를 쓴다).
+            del pbr["metallicRoughnessTexture"]
+            changed = True
+    if not changed:
+        return False
+    # 더 이상 쓰지 않는 확장 선언 정리 (검증기의 extensionsUsed 일관성 유지)
+    if not any("KHR_materials_specular" in (m.get("extensions") or {}) for m in materials):
+        for key in ("extensionsUsed", "extensionsRequired"):
+            lst = gltf.get(key)
+            if lst and "KHR_materials_specular" in lst:
+                lst.remove("KHR_materials_specular")
+                if not lst:
+                    gltf.pop(key, None)
+    _write_glb(gltf, bin_data, output_path)
+    return True
+
+
 def render_check(path):
     """tools/matrix 검증기로 GLB 렌더링 정상성 평가 — 리포트 dict.
 
@@ -1240,17 +1453,51 @@ def run(req):
         message = f"Validated immutable {stage} GLB artifact"
         transformed = False
         if stage == "retopo":
+            # 복원 메시가 바닥 판(base slab) 위에 서 있으면 슬래브만 잘라
+            # 캐릭터를 구제한다 (정상 메시는 no-op — 실측: gladiator/vampire-v1).
+            stripped = 0
+            try:
+                stripped = strip_base_plane(source, output)
+            except BasePlaneRescueError:
+                # 미니어처 구제는 저해상도(진흙 외형) 결과만 남으므로 조용한
+                # passthrough 대신 작업을 명시 실패시켜 이미지 재생성을 유도한다.
+                raise
+            except Exception as exc:
+                emit("progress", jobId=job, progress=.3, message=f"Base-plane strip skipped: {exc}")
+            if stripped:
+                transformed = True
+                source = output  # 이후 텍스처 베이킹은 슬래브 제거본을 입력으로
+                metrics = {"adapter": "base-plane-strip", "validated": True,
+                           "strippedVertices": stripped, "previewOnly": True}
+                message = f"Removed base plane ({stripped} vertices) from reconstruction"
             # shape-only 메시(텍스처 없음)에 참조 이미지를 정면 투영으로 베이킹.
             reference = find_reference_image(workspace)
             if reference:
                 emit("progress", jobId=job, progress=.4, message="Projecting reference image onto mesh")
                 try:
-                    transformed = bake_texture(source, reference, output)
-                    if transformed:
+                    baked = bake_texture(source, reference, output)
+                    if baked:
+                        transformed = True
                         metrics = {"adapter": "front-projection-offline", "validated": True, "textured": True, "previewOnly": True}
+                        if stripped:
+                            metrics["strippedVertices"] = stripped
                         message = "Baked front-projected base color texture"
                 except Exception as exc:
                     emit("progress", jobId=job, progress=.5, message=f"Texture projection skipped: {exc}")
+            # Hunyuan 텍스처 출력의 광택 과다 재질(specular 2.0 + metallic 1.0)을
+            # 중화 — 뷰어에서 플라스틱 인형처럼 보이는 문제의 근본 수정
+            # (실측: nurse/gladiator, 구/신 캐릭터 공통).
+            try:
+                neutralized = neutralize_material(output if transformed else source, output)
+            except Exception as exc:
+                neutralized = False
+                emit("progress", jobId=job, progress=.55, message=f"Material neutralize skipped: {exc}")
+            if neutralized:
+                if not transformed:
+                    metrics = {"adapter": "material-neutralize", "validated": True, "previewOnly": True}
+                    message = "Neutralized reconstruction material (specular/metallic)"
+                transformed = True
+                metrics["materialNeutralized"] = True
         elif stage == "rig":
             # skeleton이 없는 static mesh에 실측 기반 rig 추가 (체형 자동 판별:
             # 직립 → humanoid 14조인트, 체장>키 → quadruped 수평 척추 스켈레톤).

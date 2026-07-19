@@ -1191,5 +1191,195 @@ class LegQualityTest(unittest.TestCase):
         self.assertAlmostEqual(qz["score"], qy["score"], places=3)
 
 
+class StripBasePlaneTest(unittest.TestCase):
+    """복원 메시 하단 바닥 판(base slab) 제거 회귀 테스트.
+
+    실측(2026-07-20): gladiator 3장·vampire v1은 캐릭터가 2×2 슬래브 위에
+    선 채 복원됐고, 슬래브가 정규화 볼륨을 차지해 캐릭터가 키 0.67의
+    미니어처로 축소됐다. strip_base_plane은 슬래브를 잘라내고 남은
+    캐릭터를 Hunyuan 규약(최장축 ~1.987, 원점 중심)으로 재정규화한다."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "validate_character",
+            os.path.join(os.path.dirname(__file__), "..", "tools", "matrix",
+                         "validate_character.py"))
+        cls.vc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.vc)
+        cls.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-slab-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    # 기둥(캐릭터 대역) 버텍스 수 — 4열 × 41행
+    COLUMN_VERTS = 4 * 41
+    SLAB_VERTS = 21 * 21
+
+    @staticmethod
+    def _make_glb(path, with_slab=True, rotation=None):
+        """좁은 수직 기둥(캐릭터) + 옵션 전폭 슬래브를 가진 indexed GLB.
+
+        rotation을 주면 데이터를 Z-up으로 저장해 원시 Hunyuan 복원처럼
+        노드 회전(+90° X)으로 Y-up이 되는 경우를 재현한다."""
+        world = []
+        tris = []
+        # 기둥: x ∈ {-0.05,-0.02,0.02,0.05}, y = 0.02 + k·0.015 (0.02~0.62), z=0
+        cols = (-0.05, -0.02, 0.02, 0.05)
+        for k in range(41):
+            y = 0.02 + k * 0.015
+            for x in cols:
+                world.append((x, y, 0.0))
+        for k in range(40):
+            for c in range(3):
+                a = 4 * k + c
+                tris += [(a, a + 1, a + 5), (a, a + 5, a + 4)]
+        if with_slab:
+            base = len(world)
+            for i in range(21):
+                for j in range(21):
+                    world.append((-1.0 + i * 0.1, 0.0, -1.0 + j * 0.1))
+            for i in range(20):
+                for j in range(20):
+                    a = base + i * 21 + j
+                    tris += [(a, a + 1, a + 22), (a, a + 22, a + 21)]
+        if rotation:
+            # world = R_x(+90°)·local ⇒ local = (x, z, -y)
+            pts = [(x, z, -y) for x, y, z in world]
+        else:
+            pts = world
+        buf = bytearray()
+        for v in pts:
+            buf += struct.pack("<fff", *v)
+        idx_off = len(buf)
+        flat = [i for t in tris for i in t]
+        buf += struct.pack(f"<{len(flat)}I", *flat)
+        node = {"mesh": 0}
+        if rotation:
+            node["rotation"] = rotation
+        gltf = {
+            "asset": {"version": "2.0"}, "scene": 0,
+            "scenes": [{"nodes": [0]}], "nodes": [node],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+            "buffers": [{"byteLength": len(buf)}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": idx_off},
+                            {"buffer": 0, "byteOffset": idx_off, "byteLength": len(flat) * 4}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": len(pts), "type": "VEC3",
+                 "min": [min(p[k] for p in pts) for k in range(3)],
+                 "max": [max(p[k] for p in pts) for k in range(3)]},
+                {"bufferView": 1, "componentType": 5125, "count": len(flat), "type": "SCALAR"},
+            ],
+        }
+        worker._write_glb(gltf, buf, path)
+
+    def _world_bounds(self, path):
+        gltf, bin_data = worker._read_glb(path)
+        pos = self.vc._world_positions(gltf, bin_data)
+        return pos, [(min(p[k] for p in pos), max(p[k] for p in pos)) for k in range(3)]
+
+    def test_strips_slab_and_renormalizes(self):
+        glb = os.path.join(self.tmp.name, "slab.glb")
+        self._make_glb(glb, with_slab=True)
+        removed = worker.strip_base_plane(glb, glb)
+        self.assertEqual(removed, self.SLAB_VERTS)
+        pos, bounds = self._world_bounds(glb)
+        self.assertEqual(len(pos), self.COLUMN_VERTS)
+        # Hunyuan 규약 재정규화: 최장축 = 표준 키, bbox 중심 = 원점
+        size = max(hi - lo for lo, hi in bounds)
+        self.assertAlmostEqual(size, worker.STANDARD_CHARACTER_HEIGHT, places=4)
+        for lo, hi in bounds:
+            self.assertAlmostEqual((lo + hi) / 2.0, 0.0, places=4)
+        # 인덱스는 기둥 삼각형만 남고 전부 유효 범위여야 한다
+        gltf, bin_data = worker._read_glb(glb)
+        idx = worker._read_indices(gltf, bin_data, gltf["meshes"][0]["primitives"][0])
+        self.assertEqual(len(idx), 40 * 3 * 2 * 3)
+        self.assertLess(max(idx), self.COLUMN_VERTS)
+        # 멱등성: 슬래브가 사라졌으므로 재호출은 no-op
+        self.assertEqual(worker.strip_base_plane(glb, glb), 0)
+
+    def test_zup_node_rotation(self):
+        """원시 Hunyuan 복원(Z-up 정점 + 노드 +90° X 회전)에서도 월드 기준으로
+        슬래브를 검출·제거하고 재정규화해야 한다."""
+        glb = os.path.join(self.tmp.name, "slab-zup.glb")
+        self._make_glb(glb, with_slab=True, rotation=[0.7071068, 0.0, 0.0, 0.7071068])
+        removed = worker.strip_base_plane(glb, glb)
+        self.assertEqual(removed, self.SLAB_VERTS)
+        pos, bounds = self._world_bounds(glb)
+        size = max(hi - lo for lo, hi in bounds)
+        self.assertAlmostEqual(size, worker.STANDARD_CHARACTER_HEIGHT, places=4)
+        # 재정규화 후에도 월드 업축은 Y (기둥의 최장축이 Y여야 함)
+        self.assertAlmostEqual(bounds[1][1] - bounds[1][0], size, places=4)
+
+    def test_noop_without_slab(self):
+        """슬래브 없는 정상 메시는 바이트 하나 건드리지 않아야 한다
+        (실측: vampire-v2/nurse 정상 후보 no-op 확인)."""
+        glb = os.path.join(self.tmp.name, "clean.glb")
+        self._make_glb(glb, with_slab=False)
+        before = open(glb, "rb").read()
+        self.assertEqual(worker.strip_base_plane(glb, glb), 0)
+        self.assertEqual(open(glb, "rb").read(), before)
+
+
+class NeutralizeMaterialTest(unittest.TestCase):
+    """Hunyuan 텍스처 출력의 광택 과다 재질 중화 회귀 테스트
+    (실측: specularColorFactor [2,2,2] + metallic 기본 1.0 + MR 텍스처)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-test-")
+        self.addCleanup(self.tmp.cleanup)
+        self.glb = os.path.join(self.tmp.name, "in.glb")
+
+    def _make_hunyuan_like_glb(self, path):
+        make_glb(path, with_material=True)
+        gltf, bin_data = worker._read_glb(path)
+        gltf["extensionsUsed"] = ["KHR_materials_specular"]
+        gltf["materials"][0] = {
+            "name": "Material_0",
+            "extensions": {"KHR_materials_specular": {"specularColorFactor": [2.0, 2.0, 2.0]}},
+            "pbrMetallicRoughness": {
+                "baseColorTexture": {"index": 0},
+                "metallicRoughnessTexture": {"index": 1},
+                # metallicFactor 미지정 = glTF 기본 1.0 (완전 금속)
+            },
+        }
+        worker._write_glb(gltf, bin_data, path)
+
+    def test_neutralizes_specular_and_metallic(self):
+        self._make_hunyuan_like_glb(self.glb)
+        self.assertTrue(worker.neutralize_material(self.glb, self.glb))
+        gltf, _ = worker._read_glb(self.glb)
+        mat = gltf["materials"][0]
+        self.assertNotIn("extensions", mat)
+        self.assertNotIn("KHR_materials_specular", gltf.get("extensionsUsed", []))
+        pbr = mat["pbrMetallicRoughness"]
+        self.assertEqual(pbr["metallicFactor"], 0.0)
+        self.assertEqual(pbr["roughnessFactor"], 1.0)
+        self.assertNotIn("metallicRoughnessTexture", pbr)
+        # baseColor 텍스처는 보존
+        self.assertEqual(pbr["baseColorTexture"], {"index": 0})
+
+    def test_idempotent_noop_after_neutralize(self):
+        self._make_hunyuan_like_glb(self.glb)
+        worker.neutralize_material(self.glb, self.glb)
+        before = open(self.glb, "rb").read()
+        self.assertFalse(worker.neutralize_material(self.glb, self.glb))
+        self.assertEqual(open(self.glb, "rb").read(), before)
+
+    def test_noop_on_offline_projection_material(self):
+        """bake_texture가 만든 오프라인 투영 재질(metallic 0/roughness 1)은
+        이미 중화 상태이므로 no-op이어야 한다."""
+        make_glb(self.glb, with_material=False)
+        gltf, bin_data = worker._read_glb(self.glb)
+        gltf["materials"] = [{"name": "FrontProjectedBaseColor",
+                              "pbrMetallicRoughness": {"metallicFactor": 0.0,
+                                                       "roughnessFactor": 1.0}}]
+        worker._write_glb(gltf, bin_data, self.glb)
+        before = open(self.glb, "rb").read()
+        self.assertFalse(worker.neutralize_material(self.glb, self.glb))
+        self.assertEqual(open(self.glb, "rb").read(), before)
+
+
 if __name__ == "__main__":
     unittest.main()
