@@ -677,6 +677,26 @@ class QuadrupedRigTest(unittest.TestCase):
         rotated = [(-p[2], p[1], p[0]) for p in lying_x]
         self.assertEqual(worker._classify_body_type(rotated), "humanoid")
 
+    def test_tail_sway_baked_into_animation(self):
+        """Tail은 SMPL에 대응 관절이 없어 모션 베이킹 시 강직 상태였다 —
+        걸음 주기 스웨이 채널이 합성되어 회전 값이 실제로 변해야 한다."""
+        out = os.path.join(self.tmp.name, "dog-anim.glb")
+        self.assertEqual(worker.bake_animation(self.out, make_motion(frames=30), out), 1)
+        gltf, bin_data = worker._read_glb(out)
+        node_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
+        anim = gltf["animations"][0]
+        ch = [c for c in anim["channels"]
+              if c["target"]["node"] == node_by_name["Tail"]
+              and c["target"]["path"] == "rotation"]
+        self.assertEqual(len(ch), 1, "quadruped motion must include a Tail channel")
+        acc = gltf["accessors"][anim["samplers"][ch[0]["sampler"]]["output"]]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        qy = [struct.unpack_from("<4f", bin_data, base + 16 * f)[1]
+              for f in range(acc["count"])]
+        self.assertGreater(max(qy) - min(qy), 0.05,
+                           "tail must actually sway, not stay rigid")
+
     def test_length_scale_normalization(self):
         """4족은 키(Y)가 아니라 체장(Z) 기준으로 정규화 — 0.88m 개가 휴머노이드
         표준 키 1.99m로 2.3배 거인화되던 버그의 회귀."""

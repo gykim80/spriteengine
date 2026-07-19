@@ -1033,6 +1033,20 @@ def bake_animation(glb_path, motion_payload, output_path):
                 norm = math.sqrt(sum(c * c for c in q)) or 1.0
                 blob += struct.pack("<4f", *(c / norm for c in q))
             add_channel(node, "rotation", bytes(blob), "VEC4")
+        # 4족 꼬리 스웨이: Tail은 SMPL에 대응 관절이 없어 그대로 두면 모든
+        # 모션에서 꼬리가 강직 상태다. 걸음 표준 주기(~1.25Hz)의 yaw 사인
+        # 스웨이에 2배 주파수·절반 이하 진폭의 pitch 바운스를 합성해
+        # 자연스러운 흔들림을 만든다 (자체 리깅 4족 마커가 있을 때만).
+        tail_node = node_by_name.get("Tail")
+        if tail_node is not None and gltf["skins"][0].get("name") == "AutoQuadrupedRig":
+            blob = bytearray()
+            for f in range(frames):
+                yaw = math.radians(15.0) * math.sin(2 * math.pi * 1.25 * times[f])
+                pitch = math.radians(6.0) * math.sin(2 * math.pi * 2.5 * times[f])
+                q = _quat_mul((0.0, math.sin(yaw / 2), 0.0, math.cos(yaw / 2)),
+                              (math.sin(pitch / 2), 0.0, 0.0, math.cos(pitch / 2)))
+                blob += struct.pack("<4f", *q)
+            add_channel(tail_node, "rotation", bytes(blob), "VEC4")
         # 루트 이동: 첫 프레임 기준 delta를 캐릭터 스케일로 환산해 Hips rest에 더함
         t0 = trans[0]
         blob = bytearray()
