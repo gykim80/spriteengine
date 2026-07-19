@@ -235,6 +235,21 @@ class AutoRigTest(unittest.TestCase):
         self.assertFalse(worker.auto_rig(self.out, out2))
         self.assertFalse(os.path.exists(out2))
 
+    def test_left_joints_on_positive_x_smpl_convention(self):
+        """"팔 위로 꺾임" 버그 회귀: SMPL/glTF 휴머노이드 규약상 캐릭터가 +Z를
+        향할 때 Left* 조인트는 +X 쪽이어야 한다. 반대(−X)면 리타게팅 시 SMPL
+        좌팔 회전이 미러로 적용돼 팔이 위로 접힌다."""
+        make_static_glb(self.glb)
+        worker.auto_rig(self.glb, self.out)
+        gltf, _ = worker._read_glb(self.out)
+        node_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
+        world = worker._rig_rest_world(gltf, node_by_name)
+        for name, w in world.items():
+            if name.startswith("Left"):
+                self.assertGreater(w[0], 0.0, f"{name} must be on +X, got {w[0]:.3f}")
+            elif name.startswith("Right"):
+                self.assertLess(w[0], 0.0, f"{name} must be on -X, got {w[0]:.3f}")
+
     def test_weight_regions(self):
         """하체 버텍스는 하체 조인트, 상체는 상체 조인트에 할당된다."""
         make_static_glb(self.glb)
@@ -518,7 +533,7 @@ class BakeAnimationTest(unittest.TestCase):
         gltf, bin_data = worker._read_glb(self.out)
         node_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
         world = worker._rig_rest_world(gltf, node_by_name)
-        for side, sign in (("Left", -1.0), ("Right", 1.0)):
+        for side, sign in (("Left", 1.0), ("Right", -1.0)):
             arm, fore = world[side + "Arm"], world[side + "ForeArm"]
             v = [fore[k] - arm[k] for k in range(3)]
             n = sum(c * c for c in v) ** 0.5
@@ -529,6 +544,35 @@ class BakeAnimationTest(unittest.TestCase):
             rotated = worker._quat_rotate_vec3(q, v)
             self.assertAlmostEqual(rotated[1], 0.0, places=4, msg=f"{side} arm should become horizontal")
             self.assertAlmostEqual(rotated[0], sign, places=4)
+
+    def test_smpl_hanging_arms_stay_hanging(self):
+        """"더 괴물이 되었는데" 버그 회귀: HY-Motion idle의 팔은 rot(Z,∓75°)류
+        (좌팔 −, 우팔 +)로 T-pose 수평에서 아래로 매달린다. 리깅 좌우가 SMPL
+        규약과 뒤집혀 있으면 같은 회전이 반대쪽 팔에 적용돼 정확히 미러 —
+        팔 elevation이 +75°(위로 꺾임)가 된다. 구운 뒤 팔 월드 방향이
+        반드시 아래(y<−0.8)여야 한다."""
+        import math
+        payload = make_motion()
+        half = math.radians(75.0) / 2.0
+        for row in payload["motions"][0]["quats"]:
+            row[SMPLH_JOINTS.index("L_Shoulder")] = [0.0, 0.0, -math.sin(half), math.cos(half)]
+            row[SMPLH_JOINTS.index("R_Shoulder")] = [0.0, 0.0, math.sin(half), math.cos(half)]
+        worker.bake_animation(self.rigged, payload, self.out)
+        gltf, bin_data = worker._read_glb(self.out)
+        node_by_name = {n.get("name"): i for i, n in enumerate(gltf["nodes"])}
+        world = worker._rig_rest_world(gltf, node_by_name)
+        anim = gltf["animations"][0]
+        for side in ("Left", "Right"):
+            # 상위 체인(Hips/Spine/Chest)은 항등이므로 Arm 채널 쿼터니언이 곧
+            # 팔의 월드 회전 — rest 본 방향에 적용해 최종 방향을 얻는다.
+            q = self.read_floats(gltf, bin_data,
+                                 self.channel_output(gltf, anim, side + "Arm", "rotation"), 4)[0]
+            arm, fore = world[side + "Arm"], world[side + "ForeArm"]
+            v = [fore[k] - arm[k] for k in range(3)]
+            n = sum(c * c for c in v) ** 0.5
+            rotated = worker._quat_rotate_vec3(tuple(q), [c / n for c in v])
+            self.assertLess(rotated[1], -0.8,
+                            f"{side} arm must hang down, got dir={rotated}")
 
     def test_arm_rest_delta_keeps_forearm_chain_consistent(self):
         """ForeArm에는 q' = D_arm ⊗ q ⊗ D⁻¹ 보정 — 항등 프레임에서 부모와 합성 시

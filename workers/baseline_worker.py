@@ -308,21 +308,25 @@ def auto_rig(glb_path, output_path):
     h = (max_y - min_y) or 1.0
 
     # 2. 조인트 정의 (name, 월드 위치, 부모 이름) -------------------------
+    # 좌우 명명은 SMPL/glTF 휴머노이드 규약(캐릭터가 +Z를 향할 때 왼쪽=+X)을
+    # 따른다. 반대로 배치하면 리타게팅 시 SMPL 좌팔 회전(수평→매달림,
+    # rot(Z,−75°)류)이 −X 팔에 적용돼 정확히 미러 — 팔이 위로 꺾여 머리 옆에
+    # 붙는 증상이 난다 (실측: idle 팔 elevation 기대 −75° ↔ 버그 +75°).
     JDEF = [
         ("Hips",         (cx,          min_y + h*.52, cz), None),
         ("Spine",        (cx,          min_y + h*.62, cz), "Hips"),
         ("Chest",        (cx,          min_y + h*.73, cz), "Spine"),
         ("Head",         (cx,          min_y + h*.88, cz), "Chest"),
-        ("LeftUpLeg",    (cx - w*.13,  min_y + h*.48, cz), "Hips"),
-        ("LeftLeg",      (cx - w*.13,  min_y + h*.27, cz), "LeftUpLeg"),
-        ("LeftFoot",     (cx - w*.13,  min_y + h*.04, cz), "LeftLeg"),
-        ("RightUpLeg",   (cx + w*.13,  min_y + h*.48, cz), "Hips"),
-        ("RightLeg",     (cx + w*.13,  min_y + h*.27, cz), "RightUpLeg"),
-        ("RightFoot",    (cx + w*.13,  min_y + h*.04, cz), "RightLeg"),
-        ("LeftArm",      (cx - w*.30,  min_y + h*.73, cz), "Chest"),
-        ("LeftForeArm",  (cx - w*.44,  min_y + h*.62, cz), "LeftArm"),
-        ("RightArm",     (cx + w*.30,  min_y + h*.73, cz), "Chest"),
-        ("RightForeArm", (cx + w*.44,  min_y + h*.62, cz), "RightArm"),
+        ("LeftUpLeg",    (cx + w*.13,  min_y + h*.48, cz), "Hips"),
+        ("LeftLeg",      (cx + w*.13,  min_y + h*.27, cz), "LeftUpLeg"),
+        ("LeftFoot",     (cx + w*.13,  min_y + h*.04, cz), "LeftLeg"),
+        ("RightUpLeg",   (cx - w*.13,  min_y + h*.48, cz), "Hips"),
+        ("RightLeg",     (cx - w*.13,  min_y + h*.27, cz), "RightUpLeg"),
+        ("RightFoot",    (cx - w*.13,  min_y + h*.04, cz), "RightLeg"),
+        ("LeftArm",      (cx + w*.30,  min_y + h*.73, cz), "Chest"),
+        ("LeftForeArm",  (cx + w*.44,  min_y + h*.62, cz), "LeftArm"),
+        ("RightArm",     (cx - w*.30,  min_y + h*.73, cz), "Chest"),
+        ("RightForeArm", (cx - w*.44,  min_y + h*.62, cz), "RightArm"),
     ]
     JNAMES = [j[0] for j in JDEF]
     JWORLD = {j[0]: j[1] for j in JDEF}

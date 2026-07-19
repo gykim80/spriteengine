@@ -12,6 +12,9 @@
                  byte-identical하지 않은지 (ckpt 미로딩 버그 같은 회귀 탐지)
   4. grounding — 정보성: 메시 최저점이 원점에서 크게 벗어나 있으면 알림만
                  (뷰어가 자동으로 접지시키므로 실패 사유는 아님)
+  5. arm_pose  — 좌우 명명이 SMPL/glTF 규약(+X=Left)인지, 그리고 클립들을
+                 FK로 실측한 팔(Arm→ForeArm) elevation 중앙값이 아래를 향하는지
+                 ("팔이 위로 꺾여 머리 옆에 붙음" 미러 리깅 버그 재발 탐지)
 
 사용법:
   python3 validate_character.py <character.glb> [--json]
@@ -203,14 +206,90 @@ def check_deformation(gltf, bin_data):
             "distinct_clips": len(dupes)}
 
 
+# 팔 elevation 중앙값 상한(°): 정상 모션 셋은 팔이 대부분 매달림(−60~−85°)이고
+# 일시적으로만 올라간다. 미러 리깅 버그는 거의 전 프레임 +70°대로 나타난다.
+MAX_MEDIAN_ARM_ELEVATION_DEG = 30.0
+
+
+def check_arm_pose(gltf, bin_data):
+    node_by_name = {n.get("name"): i for i, n in enumerate(gltf.get("nodes", []))}
+    needed = ("Hips", "LeftArm", "LeftForeArm", "RightArm", "RightForeArm")
+    if any(n not in node_by_name for n in needed):
+        return {"ok": True, "issues": [], "note": "no humanoid arm joints to check"}
+    issues = []
+    rest = worker._rig_rest_world(gltf, node_by_name)
+    # 좌우 명명 규약: 캐릭터가 +Z를 향할 때 Left*는 +X 쪽 (SMPL/glTF 휴머노이드).
+    # 반대면 SMPL 좌팔 회전이 미러로 적용돼 팔이 위로 접힌다.
+    if not (rest["LeftArm"][0] > 0.0 > rest["RightArm"][0]):
+        issues.append(f"rig left/right mirrored vs SMPL convention: LeftArm x={rest['LeftArm'][0]:.3f} "
+                      f"RightArm x={rest['RightArm'][0]:.3f} (expected Left on +X)")
+
+    animations = gltf.get("animations") or []
+    parent = {}
+    for i, n in enumerate(gltf.get("nodes", [])):
+        for c in n.get("children", []):
+            parent[c] = i
+    elevations = []
+    for anim in animations:
+        tracks = {}
+        for ch in anim.get("channels", []):
+            sampler = anim["samplers"][ch["sampler"]]
+            path = ch["target"].get("path")
+            if path not in ("rotation", "translation"):
+                continue
+            width = 4 if path == "rotation" else 3
+            tracks.setdefault(ch["target"].get("node"), {})[path] = \
+                _read_accessor_floats(gltf, bin_data, sampler["output"], width)
+        if not tracks:
+            continue
+        frames = min(len(v) for t in tracks.values() for v in t.values())
+
+        def world(idx, frame, memo):
+            if idx in memo:
+                return memo[idx]
+            node = gltf["nodes"][idx]
+            t = tracks.get(idx, {})
+            q = tuple(t["rotation"][frame]) if "rotation" in t else tuple(node.get("rotation", (0, 0, 0, 1)))
+            tr = tuple(t["translation"][frame]) if "translation" in t else tuple(node.get("translation", (0, 0, 0)))
+            p = parent.get(idx)
+            if p is None:
+                memo[idx] = (q, tr)
+            else:
+                pq, pp = world(p, frame, memo)
+                rt = worker._quat_rotate_vec3(pq, tr)
+                memo[idx] = (worker._quat_mul(pq, q), tuple(pp[k] + rt[k] for k in range(3)))
+            return memo[idx]
+
+        for frame in sorted({0, frames // 4, frames // 2, 3 * frames // 4, frames - 1}):
+            memo = {}
+            for side in ("Left", "Right"):
+                a = world(node_by_name[side + "Arm"], frame, memo)[1]
+                f = world(node_by_name[side + "ForeArm"], frame, memo)[1]
+                v = [f[k] - a[k] for k in range(3)]
+                n = math.sqrt(sum(c * c for c in v))
+                if n > 1e-9:
+                    elevations.append(math.degrees(math.asin(max(-1.0, min(1.0, v[1] / n)))))
+    median = None
+    if elevations:
+        median = sorted(elevations)[len(elevations) // 2]
+        if median > MAX_MEDIAN_ARM_ELEVATION_DEG:
+            issues.append(f"arms point upward: median elevation {median:+.1f}deg across "
+                          f"{len(elevations)} samples (limit {MAX_MEDIAN_ARM_ELEVATION_DEG:+.0f}deg) "
+                          f"— mirrored rig or retarget regression")
+    return {"ok": not issues, "issues": issues,
+            "median_elevation_deg": None if median is None else round(median, 1),
+            "samples": len(elevations)}
+
+
 def validate(glb_path):
     gltf, bin_data = worker._read_glb(glb_path)
     upright = check_upright(gltf, bin_data)
     hierarchy = check_hierarchy(gltf)
     deformation = check_deformation(gltf, bin_data)
-    ok = upright["ok"] and hierarchy["ok"] and deformation["ok"]
-    return {"path": glb_path, "ok": ok,
-            "upright": upright, "hierarchy": hierarchy, "deformation": deformation}
+    arm_pose = check_arm_pose(gltf, bin_data)
+    ok = upright["ok"] and hierarchy["ok"] and deformation["ok"] and arm_pose["ok"]
+    return {"path": glb_path, "ok": ok, "upright": upright,
+            "hierarchy": hierarchy, "deformation": deformation, "arm_pose": arm_pose}
 
 
 def main():
@@ -224,7 +303,7 @@ def main():
     else:
         status = "PASS" if report["ok"] else "FAIL"
         print(f"[{status}] {args.glb}")
-        for section in ("upright", "hierarchy", "deformation"):
+        for section in ("upright", "hierarchy", "deformation", "arm_pose"):
             r = report[section]
             print(f"  {section}: {'ok' if r['ok'] else 'FAIL'}")
             for issue in r.get("issues", []):
