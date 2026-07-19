@@ -106,6 +106,20 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
     setMenuFor(null);
     try { await api.openWorkspace(id); } catch (e) { setNotice(errText(e)); }
   }
+  // 원본 이미지 lightbox 열기 — 썸네일 캐시가 없으면 즉시 로드 후 표시
+  async function openPreview(j: Job) {
+    if (!thumbs[j.id]) {
+      try {
+        const uri = await api.readJobImage(j.id);
+        if (!uri) { setNotice('원본 이미지를 불러오지 못했습니다.'); return; }
+        setThumbs(t => ({...t, [j.id]: uri}));
+      } catch (e) {
+        setNotice(errText(e));
+        return;
+      }
+    }
+    setPreview(j);
+  }
 
   return (
     <section className="content"
@@ -139,9 +153,9 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
                   <i style={{width: `${j.progress}%`}} />
                 </div>
               </button>
-              {thumbs[j.id] && (
+              {!!j.image && (
                 <button className="thumb-zoom-btn" title="원본 이미지 보기" aria-label={`View ${j.name} original image`}
-                  onClick={() => setPreview(j)}>
+                  onClick={() => openPreview(j)}>
                   <Maximize2 />
                 </button>
               )}
