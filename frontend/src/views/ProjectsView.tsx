@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {Check, FolderOpen, ImagePlus, Layers3, MoreHorizontal, Pencil, Plus, Trash2, X} from 'lucide-react';
+import {Check, FolderOpen, ImagePlus, Layers3, Maximize2, MoreHorizontal, Pencil, Plus, Trash2, X} from 'lucide-react';
 import {api, errText} from '../api';
 import type {Job} from '../types';
 
@@ -28,6 +28,7 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
   const [draft, setDraft] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [preview, setPreview] = useState<Job | null>(null); // 원본 이미지 lightbox 대상
   const renameRef = useRef<HTMLInputElement>(null);
 
   // 이미지 파일 drag & drop → 즉시 프로젝트 생성
@@ -56,6 +57,14 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
   }, [jobs]);
 
   useEffect(() => { if (renaming) renameRef.current?.select(); }, [renaming]);
+
+  // 원본 이미지 lightbox는 Escape로 닫는다.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreview(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview]);
 
   // 열린 카드 메뉴는 바깥 클릭 또는 Escape로 닫는다.
   useEffect(() => {
@@ -130,6 +139,12 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
                   <i style={{width: `${j.progress}%`}} />
                 </div>
               </button>
+              {thumbs[j.id] && (
+                <button className="thumb-zoom-btn" title="원본 이미지 보기" aria-label={`View ${j.name} original image`}
+                  onClick={() => setPreview(j)}>
+                  <Maximize2 />
+                </button>
+              )}
               <div className="project-meta">
                 {renaming === j.id ? (
                   <div className="inline-rename">
@@ -171,6 +186,16 @@ export default function ProjectsView({jobs, running, onOpen, onImport, onImportF
           );
         })}
       </div>
+      {preview && thumbs[preview.id] && (
+        <div className="lightbox" role="dialog" aria-modal="true" aria-label={`${preview.name} original image`}
+          onClick={() => setPreview(null)}>
+          <button className="lightbox-close" aria-label="Close preview" onClick={() => setPreview(null)}><X /></button>
+          <figure onClick={e => e.stopPropagation()}>
+            <img src={thumbs[preview.id]} alt={`${preview.name} 원본 참조 이미지`} />
+            <figcaption>{preview.name} · 원본 참조 이미지</figcaption>
+          </figure>
+        </div>
+      )}
     </section>
   );
 }
