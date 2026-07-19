@@ -245,6 +245,27 @@ class BasePlaneRescueError(ValueError):
     """슬래브 제거 후 남은 캐릭터가 저해상도 미니어처라 구제를 기각함."""
 
 
+# 저해상도 진흙(mud) 복원 기각 — face_count=40000 요청 기준 정상 Hunyuan
+# 출력은 정점 23,876~29,531개(등록 22종 실측 2026-07-20). 실측 실패
+# (gladiator, 사용자 신고 "완전 심각"): 11,483 verts — 디테일이 뭉개진 진흙
+# 품질인데 직립/파편/슬래브 게이트를 모두 통과했다. 정상 최소값의 75%를
+# 하한으로 두면 정상(23.9k)과 진흙(11.5k) 사이 갭이 2배 이상이라 안전하다.
+RECON_MIN_VERTICES = 18000
+
+
+class LowResolutionMeshError(ValueError):
+    """복원 메시가 진흙 품질(정점 수 하한 미달) — 원본 이미지 재생성 필요."""
+
+
+def total_vertex_count(glb_path):
+    """GLB의 전체 mesh POSITION 정점 수 (accessor count 합)."""
+    gltf, _ = _read_glb(glb_path)
+    return sum(gltf["accessors"][prim["attributes"]["POSITION"]].get("count", 0)
+               for mesh in gltf.get("meshes", [])
+               for prim in mesh.get("primitives", [])
+               if "POSITION" in prim.get("attributes", {}))
+
+
 def _component_size(component_type):
     return {5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4}[component_type]
 
@@ -1453,6 +1474,17 @@ def run(req):
         message = f"Validated immutable {stage} GLB artifact"
         transformed = False
         if stage == "retopo":
+            # 저해상도 진흙 복원은 어떤 후처리로도 품질을 살릴 수 없으므로
+            # 파이프라인 진입 전에 명시 실패시켜 이미지 재생성을 유도한다
+            # (실측: gladiator 11,483 verts — 사용자 신고 "완전 심각").
+            # 오프라인 procedural 프리뷰(character.glb, 12 verts)는 의도적
+            # 저폴리이므로 실제 Hunyuan 복원 산출물에만 적용한다.
+            if os.path.basename(source) == "hunyuan3d21.glb":
+                verts = total_vertex_count(source)
+                if verts < RECON_MIN_VERTICES:
+                    raise LowResolutionMeshError(
+                        f"reconstruction is low-res mud quality ({verts} vertices "
+                        f"< {RECON_MIN_VERTICES}) — regenerate the source image")
             # 복원 메시가 바닥 판(base slab) 위에 서 있으면 슬래브만 잘라
             # 캐릭터를 구제한다 (정상 메시는 no-op — 실측: gladiator/vampire-v1).
             stripped = 0

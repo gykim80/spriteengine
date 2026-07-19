@@ -1394,5 +1394,64 @@ class NeutralizeMaterialTest(unittest.TestCase):
         self.assertEqual(open(self.glb, "rb").read(), before)
 
 
+class MudGateTest(unittest.TestCase):
+    """retopo 저해상도 진흙(mud) 복원 기각 게이트 회귀 테스트.
+
+    실측(2026-07-20 gladiator, 사용자 신고 "완전 심각"): 11,483 verts 진흙
+    복원이 직립/파편/슬래브 게이트를 전부 통과해 앱 파이프라인에 등록됐다.
+    게이트는 실제 Hunyuan 산출물(hunyuan3d21.glb)에만 적용하고, 의도적
+    저폴리인 오프라인 procedural 프리뷰(character.glb)는 예외로 둔다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-mud-")
+        self.addCleanup(self.tmp.cleanup)
+
+    def _run_retopo(self, input_path):
+        events = []
+        original = worker.emit
+        worker.emit = lambda t, **p: events.append({"type": t, **p})
+        try:
+            worker.run({"jobId": "mud-test", "stage": "retopo",
+                        "workspace": self.tmp.name, "input": input_path})
+        finally:
+            worker.emit = original
+        return events
+
+    def _count_glb(self, path, count):
+        """POSITION accessor count만 가진 최소 GLB (게이트는 count 합만 본다)."""
+        gltf = {"asset": {"version": "2.0"},
+                "buffers": [{"byteLength": 0}],
+                "accessors": [{"componentType": 5126, "count": count, "type": "VEC3"}],
+                "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]}
+        worker._write_glb(gltf, b"", path)
+
+    def test_total_vertex_count_sums_position_accessors(self):
+        glb = os.path.join(self.tmp.name, "quad.glb")
+        make_glb(glb)
+        self.assertEqual(worker.total_vertex_count(glb), 4)
+
+    def test_low_res_hunyuan_rejected(self):
+        """실측 진흙 정점 수(11,483)의 hunyuan3d21.glb는 retopo가 명시 실패."""
+        glb = os.path.join(self.tmp.name, "hunyuan3d21.glb")
+        self._count_glb(glb, 11483)
+        with self.assertRaises(worker.LowResolutionMeshError) as ctx:
+            self._run_retopo(glb)
+        self.assertIn("11483", str(ctx.exception))
+
+    def test_normal_res_hunyuan_passes_gate(self):
+        """정상 최소 실측(23,876 verts)은 게이트를 통과해 artifact까지 도달."""
+        glb = os.path.join(self.tmp.name, "hunyuan3d21.glb")
+        self._count_glb(glb, 23876)
+        events = self._run_retopo(glb)
+        self.assertTrue(any(e["type"] == "artifact" for e in events))
+
+    def test_procedural_preview_exempt(self):
+        """오프라인 프리뷰(character.glb, 저폴리)는 이름으로 게이트 면제."""
+        glb = os.path.join(self.tmp.name, "character.glb")
+        make_glb(glb)  # 4 verts — 게이트 대상이면 즉시 기각될 정점 수
+        events = self._run_retopo(glb)
+        self.assertTrue(any(e["type"] == "artifact" for e in events))
+
+
 if __name__ == "__main__":
     unittest.main()

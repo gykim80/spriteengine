@@ -384,21 +384,10 @@ UPRIGHT_MIN_DEPTH_RATIO = 0.06
 FRAGMENT_MAX_CENTER_OFFSET = 0.5   # bbox 중심 |offset| / 최장축
 FRAGMENT_MIN_EXTENT = 1.0          # 최장축 절대 하한 (정상 ~1.99)
 
-# 저해상도 진흙(mud) 복원 검출 — face_count=40000 요청 기준 정상 Hunyuan
-# 출력은 정점 23,876~29,531개(등록 22종 실측). 실측 실패(gladiator, 사용자
-# 신고 "완전 심각"): 11,483 verts — 디테일이 뭉개진 진흙 품질인데 직립/파편
-# /슬래브 게이트를 모두 통과했다. 정상 최소값의 75% 수준을 하한으로 두면
-# 정상(23.9k)과 진흙(11.5k) 사이 갭이 2배 이상이라 안전하게 분리된다.
-RECON_MIN_VERTICES = 18000
-
-
-def mesh_vertex_count(glb_path):
-    """GLB의 전체 mesh POSITION 정점 수 (accessor count 합)."""
-    gltf, _ = worker._read_glb(glb_path)
-    return sum(gltf["accessors"][prim["attributes"]["POSITION"]].get("count", 0)
-               for mesh in gltf.get("meshes", [])
-               for prim in mesh.get("primitives", [])
-               if "POSITION" in prim.get("attributes", {}))
+# 저해상도 진흙(mud) 복원 검출 — 임계값·근거는 baseline_worker 참조
+# (worker retopo 게이트와 후보 선별이 같은 기준을 쓰도록 단일화).
+RECON_MIN_VERTICES = worker.RECON_MIN_VERTICES
+mesh_vertex_count = worker.total_vertex_count
 
 
 def humanoid_upright_quality(glb_path):
