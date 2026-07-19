@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,9 +28,10 @@ import (
 var workerFiles embed.FS
 
 type App struct {
-	ctx  context.Context
-	mu   sync.Mutex
-	jobs []Job
+	ctx     context.Context
+	mu      sync.Mutex
+	jobs    []Job
+	deleted map[string]bool // 이번 세션에서 삭제한 job ID — save 병합 시 부활 방지
 }
 type Stage struct {
 	ID     string `json:"id"`
@@ -77,7 +79,7 @@ type workerEvent struct {
 	Metrics  map[string]any `json:"metrics"`
 }
 
-func NewApp() *App                         { return &App{jobs: []Job{}} }
+func NewApp() *App                         { return &App{jobs: []Job{}, deleted: map[string]bool{}} }
 func (a *App) startup(ctx context.Context) { a.ctx = ctx; a.load() }
 
 // SPRITEENGINE_CONFIG_DIR isolates config (jobs.json, runpod.json) in tests:
@@ -136,6 +138,31 @@ func (a *App) load() {
 }
 func (a *App) save() {
 	_ = os.MkdirAll(filepath.Dir(a.dataPath()), 0755)
+	// 외부 도구(tools/matrix/run_character.py 등)가 앱 실행 중 jobs.json에
+	// 직접 등록한 job은 메모리에 없다 — 메모리 목록으로 통째로 덮어쓰면
+	// 유실되므로, 디스크에만 있는 항목을 병합한 뒤 저장한다.
+	// 이번 세션에서 명시적으로 삭제한 job은 부활시키지 않는다.
+	if b, err := os.ReadFile(a.dataPath()); err == nil {
+		var disk []Job
+		if json.Unmarshal(b, &disk) == nil {
+			known := make(map[string]bool, len(a.jobs))
+			for _, j := range a.jobs {
+				known[j.ID] = true
+			}
+			merged := false
+			for _, j := range disk {
+				if j.ID != "" && !known[j.ID] && !a.deleted[j.ID] {
+					a.jobs = append(a.jobs, j)
+					merged = true
+				}
+			}
+			if merged {
+				// UI는 최신 job이 위에 오길 기대한다 — ID 접두사가
+				// "20060102-150405" 타임스탬프라 문자열 내림차순 = 최신순.
+				sort.SliceStable(a.jobs, func(x, y int) bool { return a.jobs[x].ID > a.jobs[y].ID })
+			}
+		}
+	}
 	b, _ := json.MarshalIndent(a.jobs, "", "  ")
 	_ = os.WriteFile(a.dataPath(), b, 0644)
 }

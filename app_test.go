@@ -72,6 +72,76 @@ func TestRunNextStagePersistsArtifact(t *testing.T) {
 	}
 }
 
+// TestSaveMergesExternallyRegisteredJobs: 앱 실행 중 외부 도구
+// (tools/matrix/run_character.py 등)가 jobs.json에 직접 등록한 job이
+// 앱의 다음 save에서 유실되지 않고 병합되어야 한다.
+// 회귀: matrix2-dog2가 앱 내 프로젝트 생성 시 덮어쓰기로 사라진 버그.
+func TestSaveMergesExternallyRegisteredJobs(t *testing.T) {
+	isolateConfig(t)
+	a := NewApp()
+	inApp, err := a.CreateJob("in-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 외부 도구가 디스크의 jobs.json에 직접 항목을 추가한 상황을 재현
+	var disk []Job
+	b, err := os.ReadFile(a.dataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &disk); err != nil {
+		t.Fatal(err)
+	}
+	external := Job{ID: "20990101-000000-000001", Name: "external-dog", Status: "done", Stages: pipeline()}
+	disk = append([]Job{external}, disk...)
+	b, _ = json.MarshalIndent(disk, "", "  ")
+	if err := os.WriteFile(a.dataPath(), b, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 앱이 다시 저장해도(새 job 생성) 외부 항목이 살아남아야 한다
+	if _, err := a.CreateJob("second-in-app"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(a.dataPath())
+	var after []Job
+	if err := json.Unmarshal(b, &after); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, j := range after {
+		if j.ID == external.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("externally registered job was clobbered by save: %d jobs", len(after))
+	}
+	// 최신순(ID 내림차순) 정렬 유지 — 외부 항목(2099년)이 맨 위여야 한다
+	if after[0].ID != external.ID {
+		t.Fatalf("expected newest-first ordering, got %s first", after[0].ID)
+	}
+
+	// 삭제한 job은 병합으로 부활하면 안 된다
+	if _, err := a.DeleteJob(external.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.RenameJob(inApp.ID, "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(a.dataPath())
+	var final []Job
+	if err := json.Unmarshal(b, &final); err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range final {
+		if j.ID == external.ID {
+			t.Fatal("deleted job was resurrected by save merge")
+		}
+	}
+}
+
 func TestReadArtifactRejectsUnregisteredPath(t *testing.T) {
 	a := NewApp()
 	if _, err := a.ReadArtifact(filepath.Join(t.TempDir(), "unknown.glb")); err == nil {

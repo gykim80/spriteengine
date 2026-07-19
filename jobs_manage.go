@@ -62,6 +62,10 @@ func (a *App) DeleteJob(id string) ([]Job, error) {
 	}
 	workspace := a.jobs[i].Workspace
 	a.jobs = append(a.jobs[:i], a.jobs[i+1:]...)
+	if a.deleted == nil {
+		a.deleted = map[string]bool{}
+	}
+	a.deleted[id] = true // save 병합이 디스크 항목으로 부활시키지 않도록 기록
 	a.save()
 	if a.insideProjectsRoot(workspace) {
 		_ = os.RemoveAll(workspace)
