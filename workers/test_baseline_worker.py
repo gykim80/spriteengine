@@ -1099,5 +1099,77 @@ class RenderGateTest(unittest.TestCase):
         self.assertIn("arms point upward", str(ctx.exception))
 
 
+class LegQualityTest(unittest.TestCase):
+    """멀티시드 복원 후보 선별용 leg_quality 점수 회귀 테스트.
+
+    원시 Hunyuan 복원 GLB는 Z-up 정점 + 메시 노드 +90° X 회전으로 Y-up을
+    만든다 — 노드 변환을 무시하면 업축이 틀어져 4기둥 탐지가 전부 깨진다
+    (실측 회귀: dog2 원시 복원이 columns=1로 실격 처리됐던 버그)."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "validate_character",
+            os.path.join(os.path.dirname(__file__), "..", "tools", "matrix",
+                         "validate_character.py"))
+        cls.vc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.vc)
+        cls.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-legq-")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @staticmethod
+    def _write_points_glb(path, pts, rotation=None):
+        """POSITION만 가진 최소 GLB (노드 회전 옵션)."""
+        buf = bytearray()
+        for v in pts:
+            buf += struct.pack("<fff", *v)
+        node = {"mesh": 0}
+        if rotation:
+            node["rotation"] = rotation
+        mins = [min(p[k] for p in pts) for k in range(3)]
+        maxs = [max(p[k] for p in pts) for k in range(3)]
+        gltf = {
+            "asset": {"version": "2.0"}, "scene": 0,
+            "scenes": [{"nodes": [0]}], "nodes": [node],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+            "buffers": [{"byteLength": len(buf)}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(buf)}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": len(pts),
+                           "type": "VEC3", "min": mins, "max": maxs}],
+        }
+        worker._write_glb(gltf, buf, path)
+
+    def test_clean_quadruped_scores_positive(self):
+        glb = os.path.join(self.tmp.name, "clean.glb")
+        make_quadruped_glb(glb)
+        q = self.vc.leg_quality(glb)
+        self.assertEqual(q["columns"], 4)
+        self.assertEqual(q["quadrants"], 4)
+        self.assertGreaterEqual(q["score"], 0.0, q)
+
+    def test_missing_leg_disqualified(self):
+        glb = os.path.join(self.tmp.name, "3legs.glb")
+        make_quadruped_glb(glb, missing_leg="front_L")
+        q = self.vc.leg_quality(glb)
+        self.assertEqual(q["score"], -1.0, q)
+
+    def test_zup_node_rotation_matches_yup(self):
+        """+90° X 노드 회전(원시 Hunyuan 복원)이 적용된 Z-up 데이터도
+        Y-up 데이터와 동일한 점수를 받아야 한다."""
+        yup = os.path.join(self.tmp.name, "yup.glb")
+        pts, _ = make_quadruped_glb(yup)
+        zup = os.path.join(self.tmp.name, "zup.glb")
+        # world = R_x(+90°)·data ⇒ data = (x, z, -y)
+        self._write_points_glb(zup, [(x, z, -y) for x, y, z in pts],
+                               rotation=[0.7071068, 0.0, 0.0, 0.7071068])
+        qy = self.vc.leg_quality(yup)
+        qz = self.vc.leg_quality(zup)
+        self.assertEqual(qz["columns"], 4, qz)
+        self.assertAlmostEqual(qz["score"], qy["score"], places=3)
+
+
 if __name__ == "__main__":
     unittest.main()

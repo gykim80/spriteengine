@@ -195,11 +195,11 @@ def stage_bake():
             report[name] = {"animations": len(anims), "channels": chans,
                             "names": names, "path": baked["path"],
                             "render_valid": check["ok"],
-                            "render_issues": (check["upright"]["issues"]
-                                              + check["hierarchy"]["issues"]
-                                              + check["deformation"]["issues"]
-                                              + check["arm_pose"]["issues"]
-                                              + check["skinning"]["issues"])}
+                            "render_issues": [issue
+                                              for section in ("upright", "hierarchy", "legs",
+                                                              "deformation", "arm_pose", "skinning",
+                                                              "hands")
+                                              for issue in check.get(section, {}).get("issues", [])]}
             status = "OK" if check["ok"] else "RENDER-INVALID"
             print(f"[bake] {name}: {len(anims)} clips, channels={chans}, render={status}", flush=True)
             if not check["ok"]:
