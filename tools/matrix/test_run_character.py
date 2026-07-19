@@ -7,6 +7,34 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import matrix_pipeline as mp  # noqa: E402
 import run_character as rc  # noqa: E402
+import validate_character as vc  # noqa: E402
+
+
+class MeshResolutionTests(unittest.TestCase):
+    """저해상도 진흙 기각 게이트 (실측 2026-07-20 gladiator 11,483 verts)."""
+
+    def _glb(self, count):
+        import json as _json
+        import struct as _struct
+        import tempfile
+        gltf = {"meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+                "accessors": [{"count": count}]}
+        payload = _json.dumps(gltf).encode()
+        payload += b" " * (-len(payload) % 4)
+        data = (_struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(payload))
+                + _struct.pack("<I4s", len(payload), b"JSON") + payload)
+        f = tempfile.NamedTemporaryFile(suffix=".glb", delete=False)
+        f.write(data)
+        f.close()
+        return f.name
+
+    def test_mud_resolution_below_threshold(self):
+        self.assertLess(vc.mesh_vertex_count(self._glb(11483)),
+                        vc.RECON_MIN_VERTICES)
+
+    def test_normal_resolution_above_threshold(self):
+        self.assertGreaterEqual(vc.mesh_vertex_count(self._glb(23876)),
+                                vc.RECON_MIN_VERTICES)
 
 
 class ChunkTests(unittest.TestCase):

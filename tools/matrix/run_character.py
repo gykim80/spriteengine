@@ -147,6 +147,14 @@ def _recon_candidates(name, pngs, out_dir, quadruped):
             continue
         if stripped:
             print(f"[recon] {name}: image={png.stem} stripped base plane ({stripped} verts)", flush=True)
+        # 저해상도 진흙 기각 — 실측(gladiator, 사용자 신고 "완전 심각"): 11,483
+        # verts 진흙 복원이 직립/파편/슬래브 게이트를 전부 통과해 등록까지 갔다.
+        # 정상은 23.9k~29.5k verts(등록 22종 실측)라 하한으로 안전하게 분리된다.
+        verts = validate_character.mesh_vertex_count(str(cand))
+        if verts < validate_character.RECON_MIN_VERTICES:
+            print(f"[recon] {name}: image={png.stem} REJECTED — low-res mud "
+                  f"({verts} verts < {validate_character.RECON_MIN_VERTICES})", flush=True)
+            continue
         if quadruped:
             q = validate_character.leg_quality(str(cand))
             score, ok = q["score"], q["score"] >= 0
