@@ -223,7 +223,10 @@ def generate_motion(name):
         payload = {"input": {"task": "motion", "prompts": batch, "seed": 42, "cfg_scale": 5.0}}
         job = mp.rp("POST", "run", payload, timeout=120)
         print(f"[motion] {name}: batch {bi+1}/{len(batches)} ({len(batch)} prompts) submitted {job['id']}", flush=True)
-        out = mp.poll({f"{name}-b{bi}": job["id"]})[f"{name}-b{bi}"]
+        # 실측 2026-07-20: gladiator 배치1이 GPU에서 정상 실행 중인데 기본 40분
+        # 폴링 데드라인에 걸려 timeout 처리 → sys.exit. 엔드포인트 혼잡 시
+        # 15프롬프트 배치가 40분을 넘길 수 있어 90분으로 여유를 둔다.
+        out = mp.poll({f"{name}-b{bi}": job["id"]}, minutes=90)[f"{name}-b{bi}"]
         if not out or out.get("error"):
             sys.exit(f"[motion] {name}: batch {bi+1} failed: {(out or {}).get('error')}")
         merged["model"] = out.get("model") or merged["model"]
