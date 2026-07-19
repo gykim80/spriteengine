@@ -11,7 +11,7 @@
   5. baseline_worker motion 베이킹 → 2차 검증(직립/관절계층/스킨변형, 30클립)
   6. 통과 시 실제 앱 jobs.json + projects/<id>/에 등록
 
-사용: python3 run_character.py <name> [--set 2]
+사용: python3 run_character.py <name> [--set 1|2|q]  (q = 4족 quadruped 세트)
 """
 import argparse
 import base64
@@ -112,13 +112,14 @@ def retopo_and_rig(name, recon_glb):
     rig = mp.run_worker("rig", ws, retopo["path"])
     if not rig.get("metrics", {}).get("skinned"):
         sys.exit(f"[rig] {name}: not skinned — {rig.get('metrics')}")
+    body_type = rig.get("metrics", {}).get("bodyType", "humanoid")
     check = validate_character.validate(rig["path"])
-    print(f"[rig] {name}: upright={check['upright']['ok']} hierarchy={check['hierarchy']['ok']}", flush=True)
+    print(f"[rig] {name}: bodyType={body_type} upright={check['upright']['ok']} hierarchy={check['hierarchy']['ok']}", flush=True)
     if not check["upright"]["ok"] or not check["hierarchy"]["ok"]:
         for issue in check["upright"]["issues"] + check["hierarchy"]["issues"]:
             print(f"[rig]   {name}: {issue}", flush=True)
         sys.exit(f"[rig] {name}: FAILED render-sanity check before motion generation (stopping to save GPU time)")
-    return retopo["path"], rig["path"]
+    return retopo["path"], rig["path"], body_type
 
 
 def generate_motion(name):
@@ -162,7 +163,8 @@ def bake_and_validate(name, rig_glb):
     return baked["path"], m.get("animations", 0), m.get("model", "")
 
 
-def register_in_app(name, retopo_path, rig_path, motion_path, export_path, animations, model):
+def register_in_app(name, retopo_path, rig_path, motion_path, export_path, animations, model,
+                    body_type="humanoid"):
     jobs_path = APP_ROOT / "jobs.json"
     jobs = json.loads(jobs_path.read_text()) if jobs_path.exists() else []
     job_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().int % 1000000:06d}"
@@ -199,7 +201,7 @@ def register_in_app(name, retopo_path, rig_path, motion_path, export_path, anima
              "metrics": {"adapter": "runpod-hunyuan3d21", "textured": True}},
             {"stage": "retopo", "kind": "clean-mesh", "path": str(proj / "retopo" / Path(retopo_path).name)},
             {"stage": "rig", "kind": "rigged-model", "path": str(proj / "rig" / Path(rig_path).name),
-             "metrics": {"adapter": "auto-rig-bbox", "skinned": True}},
+             "metrics": {"adapter": "auto-rig-bbox", "skinned": True, "bodyType": body_type}},
             {"stage": "motion", "kind": "animated-model", "path": str(proj / "motion" / Path(motion_path).name),
              "metrics": {"adapter": "hy-motion-retarget", "animations": animations, "model": model}},
             {"stage": "export", "kind": "package", "path": str(proj / "export" / Path(export_path).name),
@@ -217,9 +219,10 @@ def register_in_app(name, retopo_path, rig_path, motion_path, export_path, anima
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("name")
-    ap.add_argument("--set", choices=["1", "2"], default="2")
+    ap.add_argument("--set", choices=["1", "2", "q"], default="2")
     args = ap.parse_args()
-    pool = gen_characters.CHARACTERS if args.set == "1" else gen_characters.CHARACTERS_SET2
+    pool = {"1": gen_characters.CHARACTERS, "2": gen_characters.CHARACTERS_SET2,
+            "q": gen_characters.CHARACTERS_QUADRUPED}[args.set]
     if args.name not in pool:
         sys.exit(f"unknown character {args.name!r} in set {args.set}: {sorted(pool)}")
     desc = pool[args.name]
@@ -227,13 +230,13 @@ def main():
     mp.WS.mkdir(parents=True, exist_ok=True)
     png = ensure_image(args.name, desc, args.set)
     recon_glb = reconstruct(args.name, png)
-    retopo_path, rig_path = retopo_and_rig(args.name, recon_glb)
+    retopo_path, rig_path, body_type = retopo_and_rig(args.name, recon_glb)
     generate_motion(args.name)
     motion_path, animations, model = bake_and_validate(args.name, rig_path)
     exported = mp.run_worker("export", mp.WS / args.name, motion_path)
     assert exported.get("metrics", {}).get("validated"), exported.get("metrics")
     job_id = register_in_app(args.name, retopo_path, rig_path, motion_path,
-                             exported["path"], animations, model)
+                             exported["path"], animations, model, body_type)
     print(f"CHARACTER_OK name={args.name} job={job_id} clips={animations}")
 
 
