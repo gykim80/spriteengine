@@ -228,6 +228,78 @@ def check_deformation(gltf, bin_data):
             "distinct_clips": len(dupes)}
 
 
+# 4족 다리 개수 게이트: 옆모습 원본 이미지는 반대편 다리가 가려져 3D 복원에서
+# 다리가 소실/융합될 수 있다 (실측: 측면 시바견 → 다리 결손 리포트). 접지
+# 슬라이스(최저점 위 15% 높이)를 XZ 평면에서 반경 클러스터링해 유의미한 다리
+# 기둥이 4개 이상이고 전후×좌우 4사분면을 모두 덮는지, 그리고 특정 다리가
+# 퇴화(버텍스 질량이 중앙값의 30% 미만)하지 않았는지 실측한다.
+LEG_GROUND_BAND = 0.15
+LEG_CLUSTER_RADIUS = 0.08   # × max(체장, 폭)
+LEG_SAMPLE_MAX = 500
+LEG_MIN_MASS_RATIO = 0.3
+
+
+def check_legs(gltf, bin_data):
+    if _rig_type(gltf) != "quadruped":
+        return {"ok": True, "issues": [], "note": "humanoid rig — quadruped leg check skipped"}
+    all_pos = []
+    for node in gltf.get("nodes", []):
+        if "mesh" not in node:
+            continue
+        for prim in gltf["meshes"][node["mesh"]].get("primitives", []):
+            pid = prim.get("attributes", {}).get("POSITION")
+            if pid is not None:
+                all_pos.extend(worker._read_vec3(gltf, bin_data, pid, "POSITION"))
+    if not all_pos:
+        return {"ok": False, "issues": ["no mesh POSITION data found"]}
+    xs = [p[0] for p in all_pos]; ys = [p[1] for p in all_pos]; zs = [p[2] for p in all_pos]
+    min_y = min(ys); h = (max(ys) - min_y) or 1e-9
+    xc = (max(xs) + min(xs)) / 2.0; zc = (max(zs) + min(zs)) / 2.0
+    pts = [(p[0], p[2]) for p in all_pos if p[1] < min_y + LEG_GROUND_BAND * h]
+    step = max(1, len(pts) // LEG_SAMPLE_MAX)
+    pts = pts[::step]
+    if len(pts) < 4:
+        return {"ok": False, "issues": [f"only {len(pts)} ground-contact vertices — mesh does not reach the ground"]}
+    radius = LEG_CLUSTER_RADIUS * max(max(xs) - min(xs), max(zs) - min(zs))
+    r2 = radius * radius
+    unvisited = set(range(len(pts)))
+    clusters = []
+    while unvisited:
+        seed = unvisited.pop()
+        comp = [seed]; frontier = [seed]
+        while frontier:
+            i = frontier.pop()
+            near = [j for j in unvisited
+                    if (pts[i][0] - pts[j][0]) ** 2 + (pts[i][1] - pts[j][1]) ** 2 <= r2]
+            unvisited -= set(near)
+            comp.extend(near); frontier.extend(near)
+        clusters.append(comp)
+    sig_min = max(3, len(pts) // 50)
+    legs = []
+    for comp in clusters:
+        if len(comp) < sig_min:
+            continue
+        cx = sum(pts[i][0] for i in comp) / len(comp)
+        cz = sum(pts[i][1] for i in comp) / len(comp)
+        legs.append({"verts": len(comp), "x": round(cx, 3), "z": round(cz, 3)})
+    issues = []
+    quadrants = {(leg["x"] > xc, leg["z"] > zc) for leg in legs}
+    if len(legs) < 4:
+        issues.append(f"only {len(legs)} ground-contact leg column(s) found (expected 4) "
+                      f"— reconstruction likely lost/merged occluded legs")
+    elif len(quadrants) < 4:
+        issues.append(f"leg columns cover only {len(quadrants)}/4 front-rear x left-right quadrants "
+                      f"— legs merged or missing on one side")
+    else:
+        masses = sorted(leg["verts"] for leg in legs)
+        median = masses[len(masses) // 2]
+        thin = [leg for leg in legs if leg["verts"] < LEG_MIN_MASS_RATIO * median]
+        if thin:
+            issues.append(f"degenerate thin leg(s) {thin} — vertex mass under {LEG_MIN_MASS_RATIO:.0%} "
+                          f"of median leg ({median}), occluded-side leg poorly reconstructed")
+    return {"ok": not issues, "issues": issues, "legs": legs, "ground_verts": len(pts)}
+
+
 # 팔 elevation 중앙값 상한(°): 정상 모션 셋은 팔이 대부분 매달림(−60~−85°)이고
 # 일시적으로만 올라간다. 미러 리깅 버그는 거의 전 프레임 +70°대로 나타난다.
 MAX_MEDIAN_ARM_ELEVATION_DEG = 30.0
@@ -462,13 +534,14 @@ def validate(glb_path):
     gltf, bin_data = worker._read_glb(glb_path)
     upright = check_upright(gltf, bin_data)
     hierarchy = check_hierarchy(gltf)
+    legs = check_legs(gltf, bin_data)
     deformation = check_deformation(gltf, bin_data)
     arm_pose = check_arm_pose(gltf, bin_data)
     skinning = check_skinning(gltf, bin_data)
-    ok = (upright["ok"] and hierarchy["ok"] and deformation["ok"]
+    ok = (upright["ok"] and hierarchy["ok"] and legs["ok"] and deformation["ok"]
           and arm_pose["ok"] and skinning["ok"])
     return {"path": glb_path, "ok": ok, "upright": upright,
-            "hierarchy": hierarchy, "deformation": deformation,
+            "hierarchy": hierarchy, "legs": legs, "deformation": deformation,
             "arm_pose": arm_pose, "skinning": skinning}
 
 
@@ -483,7 +556,7 @@ def main():
     else:
         status = "PASS" if report["ok"] else "FAIL"
         print(f"[{status}] {args.glb}")
-        for section in ("upright", "hierarchy", "deformation", "arm_pose", "skinning"):
+        for section in ("upright", "hierarchy", "legs", "deformation", "arm_pose", "skinning"):
             r = report[section]
             print(f"  {section}: {'ok' if r['ok'] else 'FAIL'}")
             for issue in r.get("issues", []):

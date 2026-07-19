@@ -114,9 +114,11 @@ def retopo_and_rig(name, recon_glb):
         sys.exit(f"[rig] {name}: not skinned — {rig.get('metrics')}")
     body_type = rig.get("metrics", {}).get("bodyType", "humanoid")
     check = validate_character.validate(rig["path"])
-    print(f"[rig] {name}: bodyType={body_type} upright={check['upright']['ok']} hierarchy={check['hierarchy']['ok']}", flush=True)
-    if not check["upright"]["ok"] or not check["hierarchy"]["ok"]:
-        for issue in check["upright"]["issues"] + check["hierarchy"]["issues"]:
+    print(f"[rig] {name}: bodyType={body_type} upright={check['upright']['ok']} "
+          f"hierarchy={check['hierarchy']['ok']} legs={check['legs']['ok']} "
+          f"leg_columns={check['legs'].get('legs')}", flush=True)
+    if not (check["upright"]["ok"] and check["hierarchy"]["ok"] and check["legs"]["ok"]):
+        for issue in check["upright"]["issues"] + check["hierarchy"]["issues"] + check["legs"]["issues"]:
             print(f"[rig]   {name}: {issue}", flush=True)
         sys.exit(f"[rig] {name}: FAILED render-sanity check before motion generation (stopping to save GPU time)")
     return retopo["path"], rig["path"], body_type
@@ -156,7 +158,7 @@ def bake_and_validate(name, rig_glb):
     check = validate_character.validate(baked["path"])
     print(f"[bake] {name}: {m.get('animations')} clips, render_valid={check['ok']}", flush=True)
     if not check["ok"]:
-        for section in ("upright", "hierarchy", "deformation"):
+        for section in ("upright", "hierarchy", "legs", "deformation"):
             for issue in check[section]["issues"]:
                 print(f"[bake]   {name}: {issue}", flush=True)
         sys.exit(f"[bake] {name}: FAILED final render-sanity check")

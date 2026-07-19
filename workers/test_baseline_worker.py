@@ -479,14 +479,15 @@ class ScaleNormalizeTest(unittest.TestCase):
 
 
 def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False, tail=True,
-                       stretch=(1.0, 1.0, 1.0)):
+                       stretch=(1.0, 1.0, 1.0), missing_leg=None):
     """개 형태의 4족 GLB — 수평 몸통(Z 장축) + 다리 4기둥 + 머리/꼬리.
 
     reverse=True면 Y축 180° 회전(x,z 부호 반전) — 머리가 −Z를 향하는
     역방향 복원 메시를 흉내 낸다. sideways=True면 추가로 yaw 90° 회전해
     체장이 X축을 따르는 측방향 복원 메시를 흉내 낸다. tail=False면 꼬리가
     복원에서 뭉개져 사라진 메시를, stretch는 축별 비균등 비례(말=키 큰
-    체형 등)를 흉내 낸다.
+    체형 등)를 흉내 낸다. missing_leg("front_L"/"rear_R" 등)을 주면 해당
+    다리 기둥을 생략해 옆모습 복원의 가려진 다리 소실을 흉내 낸다.
     반환: (positions, part_of) — part_of[i]는 버텍스 i의 부위 라벨.
     """
     pts = []
@@ -516,6 +517,8 @@ def make_quadruped_glb(path, scale=1.0, reverse=False, sideways=False, tail=True
     for part, zc in (("front", 0.30), ("rear", -0.30)):  # 다리 4기둥
         for sx in (-1, 1):
             side = "L" if sx > 0 else "R"
+            if f"{part}_{side}" == missing_leg:
+                continue
             for y in (0.0, 0.12, 0.25, 0.38):
                 for dz in (-0.05, 0.05):
                     add(f"leg_{part}_{side}", (0.14 * sx, y, zc + dz))
@@ -1072,9 +1075,18 @@ class RenderGateTest(unittest.TestCase):
                 self.assertTrue(art["metrics"].get("renderValid"),
                                 f"oriented dog must pass gates: {art['metrics']}")
 
+    def test_rig_stage_rejects_three_legged_dog(self):
+        """옆모습 복원에서 가려진 다리가 소실된 개는 rig 게이트가 차단해야
+        한다 — 다리 기둥 3개/사분면 미달을 legs 검사가 실측으로 잡는다."""
+        dog = os.path.join(self.tmp.name, "dog-3legs.glb")
+        make_quadruped_glb(dog, missing_leg="rear_L")
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run("rig", dog)
+        self.assertIn("leg", str(ctx.exception).lower())
+
     def test_gate_fails_stage_on_invalid_render(self):
         bad = {"ok": False}
-        for sec in ("upright", "hierarchy", "deformation", "arm_pose", "skinning"):
+        for sec in ("upright", "hierarchy", "legs", "deformation", "arm_pose", "skinning"):
             bad[sec] = {"ok": True, "issues": []}
         bad["arm_pose"] = {"ok": False, "issues": ["arms point upward (test)"]}
         original = worker.render_check

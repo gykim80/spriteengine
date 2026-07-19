@@ -77,26 +77,31 @@ TEMPLATE = ("Full body 3D game character concept art of {desc}. Single character
             "soft even lighting, no shadows on background, no text, no watermark.")
 
 # 세트 q: 4족(quadruped) 리깅 경로 검증용 (--set q 또는 CHARACTER_SET=q).
-# 측면 실루엣이 4족 복원에 가장 유리하며, 복원 결과가 X축 체장으로 나와도
-# auto-rig의 측방향 정렬(yaw 90°)·머리 방향 감지(180°) 경로가 정규화한다.
+# 복원 결과가 X축 체장으로 나와도 auto-rig의 측방향 정렬(yaw 90°)·머리 방향
+# 감지(180°) 경로가 정규화한다.
 CHARACTERS_QUADRUPED = {
     "dog":   "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
+    "dog2":  "a friendly medium-sized shiba dog with orange and cream fur and a curled tail",
     "horse": "a sturdy brown horse with a dark mane and tail",
     "cat":   "a gray tabby cat with a long straight tail",
 }
 
 # A-pose/팔 문구는 휴머노이드 전용이라 4족은 별도 템플릿을 쓴다.
+# 실측 회귀(dog): 정측면 뷰는 반대편 다리가 완전히 가려져 Hunyuan3D 복원에서
+# 가려진 다리의 형상·텍스처가 뭉개졌다 → 3/4 시점으로 네 다리가 모두 서로
+# 떨어져 보이게 강제한다 (validate_character의 legs 게이트가 결손을 실측 차단).
 QUADRUPED_TEMPLATE = ("Full body 3D game animal concept art of {desc}. Single animal, "
-                      "standing naturally on all four legs, seen directly from the side "
-                      "with the head to the right, all four legs and the tail clearly "
-                      "visible, whole body in frame. Stylized PBR game-asset look, "
+                      "standing naturally on all four legs, seen from a front three-quarter "
+                      "view so that all four legs are clearly separate and fully visible "
+                      "with visible gaps between them, no leg hidden or overlapping, "
+                      "tail visible, whole body in frame. Stylized PBR game-asset look, "
                       "clean plain light gray studio background, soft even lighting, "
                       "no shadows on background, no text, no watermark.")
 
 
 def generate(name, desc):
     tpl = QUADRUPED_TEMPLATE if name in CHARACTERS_QUADRUPED else TEMPLATE
-    # 4족 측면 실루엣은 가로가 길어 가로형 캔버스가 잘림 없이 담긴다.
+    # 4족은 몸이 가로로 길어 가로형 캔버스가 잘림 없이 담긴다.
     size = "1536x1024" if name in CHARACTERS_QUADRUPED else "1024x1536"
     body = json.dumps({
         "model": "gpt-image-2", "prompt": tpl.format(desc=desc),

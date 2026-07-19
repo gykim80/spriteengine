@@ -1284,7 +1284,7 @@ def run(req):
             if check is not None:
                 metrics["renderValid"] = check["ok"]
                 if not check["ok"]:
-                    issues = [i for sec in ("upright", "hierarchy", "deformation",
+                    issues = [i for sec in ("upright", "hierarchy", "legs", "deformation",
                                             "arm_pose", "skinning")
                               for i in check[sec]["issues"]]
                     metrics["renderIssues"] = issues
