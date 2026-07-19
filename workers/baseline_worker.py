@@ -6,6 +6,7 @@ orchestrator can validate its process/progress/artifact contract before large
 GPU environments are installed.
 """
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -758,6 +759,24 @@ def bake_texture(glb_path, image_path, output_path):
     return True
 
 
+def render_check(path):
+    """tools/matrix 검증기로 GLB 렌더링 정상성 평가 — 리포트 dict.
+
+    직립/관절계층/클립변형/팔자세/스키닝을 실측해 "누워서 리깅됨",
+    "팔이 위로 꺾임" 같은 버그가 앱 파이프라인을 통과하지 못하게 막는다.
+    검증기 파일이 없는 배포 환경(예: RunPod 컨테이너)에서는 None을 반환해
+    게이트를 건너뛴다.
+    """
+    vpath = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "tools", "matrix", "validate_character.py")
+    if not os.path.exists(vpath):
+        return None
+    spec = importlib.util.spec_from_file_location("validate_character", vpath)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.validate(path)
+
+
 def run(req):
     job = req["jobId"]
     stage = req["stage"]
@@ -839,6 +858,20 @@ def run(req):
                 emit("progress", jobId=job, progress=.5, message=f"Motion retarget skipped: {exc}")
         if not transformed:
             shutil.copy2(source, output)
+        if transformed and stage in ("rig", "motion"):
+            # 렌더링 정상성 게이트: 변환 실패는 위에서 passthrough로 계속하지만,
+            # 변환이 "성공"했는데 결과가 몬스터(누움/팔 꺾임/웨빙)면 조용히
+            # 통과시키지 않고 stage를 실패시켜 사용자에게 드러낸다.
+            emit("progress", jobId=job, progress=.65, message="Running render-validity checks")
+            check = render_check(output)
+            if check is not None:
+                metrics["renderValid"] = check["ok"]
+                if not check["ok"]:
+                    issues = [i for sec in ("upright", "hierarchy", "deformation",
+                                            "arm_pose", "skinning")
+                              for i in check[sec]["issues"]]
+                    metrics["renderIssues"] = issues
+                    raise RuntimeError(f"{stage} render validation failed: " + "; ".join(issues))
         kinds = {"retopo":"clean-mesh", "rig":"rigged-model", "motion":"animated-model", "export":"package"}
         emit("progress", jobId=job, progress=.7, message=message)
         emit("artifact", jobId=job, kind=kinds[stage], path=output, metrics=metrics)

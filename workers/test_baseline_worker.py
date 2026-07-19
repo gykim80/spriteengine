@@ -593,5 +593,50 @@ class BakeAnimationTest(unittest.TestCase):
         self.assertAlmostEqual(rotated[1], 0.0, places=4)
 
 
+class RenderGateTest(unittest.TestCase):
+    """워커 rig/motion 단계의 렌더링 정상성 게이트 회귀 테스트.
+
+    변환이 "성공"했어도 결과가 몬스터(누움/팔 꺾임/웨빙)면 stage를 실패시켜
+    잘못된 캐릭터가 앱 파이프라인을 조용히 통과하지 못하게 한다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="spriteengine-gate-")
+        self.addCleanup(self.tmp.cleanup)
+        self.glb = os.path.join(self.tmp.name, "static.glb")
+        make_static_glb(self.glb)
+
+    def _run(self, stage, input_path):
+        events = []
+        original = worker.emit
+        worker.emit = lambda t, **p: events.append({"type": t, **p})
+        try:
+            worker.run({"jobId": "gate-test", "stage": stage,
+                        "workspace": self.tmp.name, "input": input_path})
+        finally:
+            worker.emit = original
+        return events
+
+    def test_rig_stage_reports_render_valid(self):
+        events = self._run("rig", self.glb)
+        art = next(e for e in events if e["type"] == "artifact")
+        self.assertTrue(art["metrics"].get("skinned"))
+        self.assertTrue(art["metrics"].get("renderValid"),
+                        f"valid auto-rig must pass the gate: {art['metrics']}")
+
+    def test_gate_fails_stage_on_invalid_render(self):
+        bad = {"ok": False}
+        for sec in ("upright", "hierarchy", "deformation", "arm_pose", "skinning"):
+            bad[sec] = {"ok": True, "issues": []}
+        bad["arm_pose"] = {"ok": False, "issues": ["arms point upward (test)"]}
+        original = worker.render_check
+        worker.render_check = lambda path: bad
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                self._run("rig", self.glb)
+        finally:
+            worker.render_check = original
+        self.assertIn("arms point upward", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
