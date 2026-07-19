@@ -38,7 +38,11 @@ export default function ExportPanel({job, running, onExport, onPreview}: Props) 
                 <FileBox />
                 <div>
                   <b>{base(a.path)}</b>
-                  <small>{a.stage} · {a.kind}{a.metrics?.adapter ? ` · ${String(a.metrics.adapter)}` : ''}</small>
+                  <small>
+                    {a.stage} · {a.kind}
+                    {a.metrics?.adapter ? ` · ${String(a.metrics.adapter)}` : ''}
+                    {a.metrics?.bodyType === 'quadruped' ? ' · 4족(quadruped)' : ''}
+                  </small>
                 </div>
                 {a.path.toLowerCase().endsWith('.glb') ? (
                   <button className="mini" aria-label={`Preview ${base(a.path)}`} onClick={() => onPreview(a.path)}><Eye />Preview</button>
